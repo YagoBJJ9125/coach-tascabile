@@ -122,10 +122,59 @@ Migrato a **Vite + React** (vecchio single-file in `legacy/`). Build ok, testato
 ---
 
 ## Note tecniche / decisioni da prendere insieme
-- **Scope**: replica completa è grande. Proposta: partire da EPIC 2 (tracker) +
-  EPIC 6/7 (alimentazione potenziata) che sono il cuore, poi Rank (EPIC 5).
-- **Architettura**: tenere single-file o passare a build (Vite) + componenti? Con
-  questa scala conviene valutare un progetto strutturato.
-- **DB**: nuove tabelle Supabase (exercises, routines, workout_sessions, sets,
-  food_log, foods, muscle_ranks, ...). Definire schema.
+- **Scope**: replica completa è grande. Fatto: scaffold Vite + fette verticali su tutti gli EPIC.
+- **Architettura**: ✅ migrato a Vite + React a componenti.
+- **DB**: per ora local-first; sync cloud opzionale dopo (Supabase: exercises, routines,
+  workout_sessions, sets, food_log, foods, muscle_ranks, ...).
 - **Asset**: icone/animazioni esercizi (Lifoff ne ha proprie) — serve fonte libera.
+
+---
+
+# 🚀 NUOVE IDEE (2026-06-19) — da sviluppare insieme
+
+## EPIC 11 — Distribuzione: app installabile "1 click"
+Obiettivo: scaricabile/installabile come una vera app (Play Store / software PC).
+Percorso consigliato, dal più economico al più completo:
+- [ ] **PWA installabile** (priorità): `manifest.json` + service worker + icone →
+      "Aggiungi a schermata Home" su Android/iOS e "Installa app" su Chrome/Edge desktop.
+      Funziona offline (local-first si presta). Costo basso, resa immediata. ⭐ fare presto
+- [ ] **Hosting**: pubblicare la build statica (GitHub Pages / Netlify / Vercel) → URL da cui
+      installare la PWA con un tocco.
+- [ ] **Android APK/AAB** (opz.): TWA (Bubblewrap) o Capacitor → pubblicabile anche su Play Store.
+- [ ] **Desktop installabile** (opz.): Tauri (leggero, Rust) o Electron → .exe/.dmg.
+- Nota: PWA copre il 90% del bisogno "un click e si installa" su mobile e desktop.
+  Decisione: si può fare un **mini-pass PWA adesso** (veloce) e rimandare APK/desktop.
+
+## EPIC 12 — AI Coach (Claude integrato) 🧠
+Un vero coach conversazionale che crea e spiega un piano personalizzato.
+- [ ] Chat coach: parla, consiglia, motiva le scelte ("perché questo piano").
+- [ ] Genera **piano dettagliato** su misura tenendo conto di TUTTO:
+      dati fisici, obiettivo, esercizi che voglio fare (es. solo push-up + squat),
+      attrezzatura/luogo, alimentazione registrata, stile di vita, sonno,
+      **frigo/dispensa** (cosa resta, cosa integrare per forza), budget.
+- [ ] Suggerimenti dinamici giornalieri (es. "oggi mangia X per chiudere le proteine").
+- [ ] Spiegazioni nutrizionali e di allenamento con motivazioni.
+- **Decisione tecnica (mia raccomandazione)**: NON serve addestrare una rete neurale
+  propria (costoso, dati insufficienti, lento). Conviene usare un **LLM (Claude API)**
+  come "cervello" + **algoritmi deterministici** per i numeri (calorie/macro/volume/rank).
+  L'LLM riceve i dati dell'utente come contesto e produce piano + spiegazioni.
+- [ ] **Backend/proxy**: la chiave API non può stare nel client (sicurezza) → serve una
+      piccola funzione serverless (es. Vercel/Netlify functions o Supabase Edge) che inoltra
+      le richieste a Claude. Definire questo prima dell'integrazione.
+- [ ] Memoria del coach: storicizzare conversazioni/preferenze per continuità.
+
+## EPIC 13 — Database alimenti & esercizi (dati reali, non solo seed)
+- [ ] **Alimenti**: importare un DB nutrizionale esistente invece di scriverlo a mano.
+      Candidati: **OpenFoodFacts** (enorme, con barcode, gratis, food europei/italiani),
+      **USDA FoodData Central** (USA, molto dettagliato sui micronutrienti).
+      Strategia: ricerca live via API + cache locale, oppure import di un sottoinsieme.
+- [ ] **Barcode scan** collegato a OpenFoodFacts (EPIC 7).
+- [ ] **Esercizi**: importare un DB libero — **free-exercise-db** (open, ~800 esercizi con
+      immagini) o **wger** (API open). Mappare a gruppi muscolari/attrezzatura del nostro modello.
+- [ ] Normalizzare i dati esterni nel formato interno (`foods.js` / `exercises.js`).
+
+## Ordine consigliato d'attacco (proposta)
+1. **Mini-pass PWA** (EPIC 11) → subito "installabile", morale alto.
+2. Completare fasi core mancanti (onboarding mascotte, tastierino tracker, "Il mio piano").
+3. **Import DB reali** (EPIC 13) → contenuti veri prima dell'AI.
+4. **AI Coach** (EPIC 12) → con backend proxy + dati ricchi già presenti.
