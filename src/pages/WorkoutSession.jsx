@@ -16,7 +16,7 @@ import { uid, fmtClock } from "../lib/format.js";
 import { T } from "../theme.js";
 import { Button, Sheet, Input } from "../components/ui.jsx";
 import ExercisePicker from "../components/ExercisePicker.jsx";
-import { speak, srSupported, createRecognizer, isWake, classifyCommand, parseSeconds } from "../lib/voice.js";
+import { speak, srSupported, createRecognizer, isWake, classifyCommand, parseSecondsFromAlts } from "../lib/voice.js";
 
 export default function WorkoutSession() {
   const { id } = useParams();
@@ -38,7 +38,9 @@ export default function WorkoutSession() {
   const voiceModeRef = useRef("off"); // off | idle | await_cmd | await_rest
   const onRestEndRef = useRef(null);
   const sessionRef = useRef(session);
-  useEffect(() => { sessionRef.current = session; });
+  const settingsRef = useRef(settings);
+  const restSecRef = useRef(settings.restDefaultSec || 90); // durata riposo per la voce
+  useEffect(() => { sessionRef.current = session; settingsRef.current = settings; });
 
   // running clock
   useEffect(() => {
@@ -171,46 +173,67 @@ export default function WorkoutSession() {
   const say = (text, cb) => {
     speakingRef.current = true;
     setVoiceStatus("🔊 " + text);
-    speak(text, () => setTimeout(() => { speakingRef.current = false; cb && cb(); }, 350));
+    const st = settingsRef.current;
+    speak(
+      text,
+      () => setTimeout(() => { speakingRef.current = false; cb && cb(); }, 400),
+      { voiceName: st.voiceName, rate: st.voiceRate, pitch: st.voicePitch }
+    );
   };
 
-  const handleVoice = (txt) => {
+  const fmtSec = (s) => (s % 60 === 0 ? `${s / 60} minut${s === 60 ? "o" : "i"}` : `${s} secondi`);
+
+  // avvia il riposo "vocale" con annuncio di fine
+  const voiceStartRest = (sec) => {
+    startRest(sec);
+    onRestEndRef.current = () => say('Pausa finita, pronto. Di\' "coach, fine serie" per la prossima.');
+  };
+
+  // txt + confidence + alternative del riconoscimento
+  const handleVoice = (txt, conf, alts) => {
     if (speakingRef.current) return; // ignora la propria voce (TTS)
+    if (!txt || txt.length < 2) return; // ignora frammenti
     const mode = voiceModeRef.current;
+    const minConf = settingsRef.current.voiceMinConfidence ?? 0.6;
+
     if (mode === "idle") {
+      // wake: tollerante (così puoi sempre riattivarlo), ma non su puro rumore
       if (isWake(txt)) {
         voiceModeRef.current = "await_cmd";
-        say("Sì, dimmi.");
-        setVoiceStatus('🎙️ In ascolto… ("fine serie")');
+        setVoiceStatus('🎙️ Dimmi… ("fine serie")');
+        say("Sì.");
       }
       return;
     }
-    if (mode === "await_cmd") {
-      const cmd = classifyCommand(txt);
-      if (cmd === "set_done") {
-        const info = markNextSetDone();
-        if (!info) { voiceModeRef.current = "idle"; say("Hai completato tutte le serie. Di' finisci allenamento per chiudere."); return; }
-        voiceModeRef.current = "await_rest";
-        say(`Serie ${info.reps ? "di " + info.reps + " ripetizioni " : ""}${info.name} effettuata. Quanti secondi di riposo?`);
-      } else if (cmd === "next_ex") { voiceModeRef.current = "idle"; say("Ok. Di' coach quando finisci la prossima serie."); }
-      else if (cmd === "finish") { say("Finisco l'allenamento."); stopVoice(); doFinish(); }
-      else if (cmd === "skip_rest") { setRest(null); voiceModeRef.current = "idle"; say("Riposo saltato."); }
-      else if (cmd === "stop") { voiceModeRef.current = "idle"; say("Ok, mi fermo. Di' coach per riattivarmi."); }
-      else { say('Non ho capito. Di\' "fine serie" oppure "prossimo esercizio".'); }
+
+    // in modalità comando: scarta risultati a bassa confidenza (anti-rumore)
+    if (conf && conf < minConf && !isWake(txt)) {
+      setVoiceStatus("🔇 (non chiaro, ripeti)");
       return;
     }
-    if (mode === "await_rest") {
-      const sec = parseSeconds(txt);
-      if (sec) {
-        startRest(sec);
-        onRestEndRef.current = () => say("Pausa finita, pronto. Di' coach per la prossima serie.");
-        voiceModeRef.current = "idle";
-        say(`Riposo ${sec} secondi.`);
-      } else {
-        say("Non ho capito i secondi. Dimmi un numero, per esempio sessanta.");
-      }
+
+    const cmd = classifyCommand(txt);
+    if (cmd === "set_rest") {
+      const sec = parseSecondsFromAlts([txt, ...(alts || [])]);
+      if (sec) { restSecRef.current = sec; say(`Riposo impostato a ${fmtSec(sec)}.`); }
+      else say("Non ho capito i secondi. Per esempio: imposta riposo sessanta.");
+      voiceModeRef.current = "idle";
       return;
     }
+    if (cmd === "set_done") {
+      const info = markNextSetDone();
+      if (!info) { voiceModeRef.current = "idle"; say("Hai completato tutte le serie. Di' finisci allenamento."); return; }
+      voiceStartRest(restSecRef.current);
+      voiceModeRef.current = "idle";
+      say(`Serie ${info.name} fatta. Riposo ${fmtSec(restSecRef.current)}.`);
+      setVoiceStatus("⏳ Riposo " + restSecRef.current + "s");
+      return;
+    }
+    if (cmd === "next_ex") { voiceModeRef.current = "idle"; say("Ok, prossimo esercizio."); return; }
+    if (cmd === "skip_rest") { setRest(null); voiceModeRef.current = "idle"; say("Riposo saltato."); return; }
+    if (cmd === "finish") { say("Finisco l'allenamento."); stopVoice(); doFinish(); return; }
+    if (cmd === "stop") { voiceModeRef.current = "idle"; say('Ok, mi fermo. Di\' "coach" per riattivarmi.'); return; }
+    say('Non ho capito. Di\' "fine serie", "imposta riposo", "prossimo esercizio".');
   };
 
   const startVoice = () => {
@@ -218,8 +241,9 @@ export default function WorkoutSession() {
       alert("Riconoscimento vocale non supportato. Usa Chrome (anche su Android) e consenti il microfono.");
       return;
     }
+    restSecRef.current = settingsRef.current.restDefaultSec || 90;
     const r = createRecognizer({
-      onresult: (txt, final) => { if (final) handleVoice(txt); },
+      onresult: (txt, final, conf, alts) => { if (final) handleVoice(txt, conf, alts); },
       onend: () => { if (voiceModeRef.current !== "off") { try { r.start(); } catch {} } },
       onerror: () => {},
     });
@@ -228,7 +252,7 @@ export default function WorkoutSession() {
     voiceModeRef.current = "idle";
     setVoiceOn(true);
     try { r.start(); } catch {}
-    say('Modalità voce attiva. Di\' "coach" quando finisci una serie.');
+    say(`Modalità voce attiva. Riposo predefinito ${fmtSec(restSecRef.current)}. Di' "coach", poi "fine serie".`);
     setVoiceStatus('🎙️ Di\' "coach"…');
   };
 

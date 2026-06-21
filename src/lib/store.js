@@ -31,6 +31,11 @@ export const DEFAULT_STATE = {
     aiModel: "", // modello del provider cloud (vuoto = default del provider)
     ollamaUrl: "http://localhost:11434",
     ollamaModel: "gemma3",
+    // voce coach
+    voiceName: "", // nome voce TTS (vuoto = auto maschile it)
+    voiceRate: 1,
+    voicePitch: 0.8, // più basso = più maschile
+    voiceMinConfidence: 0.6, // sotto questa soglia ignora (anti-rumore)
   },
   gamify: {
     level: 1,

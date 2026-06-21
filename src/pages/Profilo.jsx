@@ -1,5 +1,5 @@
 // Profilo tab: edit profile, tracker settings, data export/import/reset.
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Header from "../components/Header.jsx";
 import { Card, Button, Label, Input, Select, Toggle, Segmented, H1, MiniLine } from "../components/ui.jsx";
 import { T } from "../theme.js";
@@ -13,6 +13,7 @@ import { fmtDateShort } from "../lib/format.js";
 import ExercisePicker from "../components/ExercisePicker.jsx";
 import { exerciseById } from "../data/exercises.js";
 import { PROVIDERS, providerInfo } from "../lib/ai.js";
+import { italianVoices, speak } from "../lib/voice.js";
 
 export default function Profilo() {
   const profile = useStore((s) => s.profile);
@@ -180,6 +181,12 @@ export default function Profilo() {
       </h2>
       <AiCard settings={settings} setSetting={setSetting} />
 
+      {/* voce coach */}
+      <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>
+        Voce del coach 🎙️
+      </h2>
+      <VoiceCard settings={settings} setSetting={setSetting} />
+
       {/* data */}
       <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>
         Dati
@@ -283,6 +290,71 @@ function Mini2({ label, value, color }) {
       <div style={{ fontSize: 10.5, color: T.mut }}>{label}</div>
       <div className="font-display" style={{ fontSize: 16, fontWeight: 700, color: color || T.text }}>{value}</div>
     </div>
+  );
+}
+
+function VoiceCard({ settings, setSetting }) {
+  const [voices, setVoices] = useState(italianVoices());
+  useEffect(() => {
+    const load = () => setVoices(italianVoices());
+    load();
+    if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = load;
+    return () => { if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null; };
+  }, []);
+
+  const test = () =>
+    speak(
+      "Ciao, sono il tuo coach. Serie effettuata, riposo sessanta secondi.",
+      null,
+      { voiceName: settings.voiceName, rate: settings.voiceRate, pitch: settings.voicePitch }
+    );
+
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <Label>Voce</Label>
+      <Select value={settings.voiceName} onChange={(e) => setSetting({ voiceName: e.target.value })}>
+        <option value="">Automatica (maschile italiana)</option>
+        {voices.map((v) => (
+          <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+        ))}
+      </Select>
+      {voices.length === 0 && (
+        <div style={{ fontSize: 11.5, color: T.amber, marginTop: -6, marginBottom: 10 }}>
+          Nessuna voce italiana trovata su questo dispositivo. Su Android installa una voce IT
+          (Impostazioni → Sintesi vocale). La voce maschile dipende dalle voci del sistema.
+        </div>
+      )}
+
+      <Label>Tono (più basso = più maschile): {Number(settings.voicePitch).toFixed(2)}</Label>
+      <input
+        type="range" min="0.5" max="1.5" step="0.05" value={settings.voicePitch}
+        onChange={(e) => setSetting({ voicePitch: Number(e.target.value) })}
+        style={{ width: "100%", marginBottom: 12 }}
+      />
+
+      <Label>Velocità: {Number(settings.voiceRate).toFixed(2)}</Label>
+      <input
+        type="range" min="0.7" max="1.3" step="0.05" value={settings.voiceRate}
+        onChange={(e) => setSetting({ voiceRate: Number(e.target.value) })}
+        style={{ width: "100%", marginBottom: 12 }}
+      />
+
+      <Label>Sensibilità microfono (più alta = ignora più rumore): {Number(settings.voiceMinConfidence).toFixed(2)}</Label>
+      <input
+        type="range" min="0" max="0.9" step="0.05" value={settings.voiceMinConfidence}
+        onChange={(e) => setSetting({ voiceMinConfidence: Number(e.target.value) })}
+        style={{ width: "100%", marginBottom: 12 }}
+      />
+
+      <Button full variant="ghost" onClick={test}>🔊 Prova voce</Button>
+
+      <div style={{ fontSize: 11, color: T.mut, marginTop: 10, lineHeight: 1.5 }}>
+        Comandi: di' <b>"coach"</b> per attivare, poi <b>"fine serie"</b> (spunta e parte il
+        riposo predefinito), <b>"imposta riposo sessanta"</b>, <b>"prossimo esercizio"</b>,
+        <b> "salta riposo"</b>, <b>"finisci allenamento"</b>. La durata riposo di default è
+        quella in Impostazioni Tracker.
+      </div>
+    </Card>
   );
 }
 
