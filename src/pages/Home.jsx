@@ -3,13 +3,14 @@
 import { useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
 import Header from "../components/Header.jsx";
-import { Card, Button, ProgressBar } from "../components/ui.jsx";
+import { Card, Button, ProgressBar, Chip } from "../components/ui.jsx";
 import { T } from "../theme.js";
 import { useStore } from "../lib/store.js";
 import { createSession } from "../lib/sessions.js";
 import { todayKey, fmtDateLong } from "../lib/format.js";
 import { energyPlan, recommendations } from "../lib/coach.js";
-import { dayLedger, weekLedger, fridgeCoverage } from "../lib/ledger.js";
+import { dayLedger, weekLedger, fridgeCoverage, activityCredit, isTrainingDay } from "../lib/ledger.js";
+import { WORKOUT_TYPES, getDayPlan, setDayWorkout, clearDayWorkout } from "../lib/dayplan.js";
 import { weightTrend } from "../lib/progress.js";
 import { readiness } from "../lib/sleep.js";
 
@@ -24,13 +25,12 @@ export default function Home() {
     () => readiness(state.sleep, sessions, Number(profile.sleepGoal) || 8),
     [state.sleep, sessions, profile.sleepGoal]
   );
-  const trainedStrength = sessions.some(
-    (s) => s.finished && s.date === today && Object.keys(s.muscles || {}).length
-  );
+  const activity = useMemo(() => activityCredit(state, today), [state, today]);
+  const trainingDay = useMemo(() => isTrainingDay(state, today), [state, today]);
 
   const energy = useMemo(
-    () => energyPlan(profile, { trend, trainedStrength }),
-    [profile, trend, trainedStrength]
+    () => energyPlan(profile, { trend, trainingDay, activityKcal: activity.credit }),
+    [profile, trend, trainingDay, activity]
   );
   const dl = useMemo(() => dayLedger(state, today, energy), [state, energy]);
   const wl = useMemo(() => weekLedger(state, energy), [state, energy]);
@@ -77,10 +77,13 @@ export default function Home() {
         <span style={{ color: T.blue, fontSize: 20 }}>›</span>
       </button>
 
+      {/* ---- programma di oggi ---- */}
+      {energy && <DayPlanCard date={today} weight={profile.weight} activity={activity} />}
+
       {/* ---- bilancio di oggi ---- */}
       {energy && (
         <Card style={{ marginBottom: 14 }}>
-          <SectionLabel>BILANCIO DI OGGI</SectionLabel>
+          <SectionLabel>BILANCIO DI OGGI {dl.activity.planned && <span style={{ color: T.amber }}>· da piano</span>}</SectionLabel>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
             <span className="font-display" style={{ fontSize: 34, fontWeight: 700, color: dl.remaining < 0 ? T.coral : T.blue }}>
               {dl.remaining}
@@ -88,11 +91,15 @@ export default function Home() {
             <span style={{ color: T.mut, fontSize: 13 }}>kcal rimanenti</span>
           </div>
           <div style={{ fontSize: 12, color: T.mut, marginBottom: 12 }}>
-            {dl.budget} budget − {dl.eaten.kcal} cibo + {dl.exercise.credit} esercizio
+            {dl.restTarget} base{dl.activity.credit > 0 ? ` + ${dl.activity.credit} allenamento` : ""} − {dl.eaten.kcal} cibo
+            {dl.activity.planned && <span style={{ color: T.amber }}> (allenamento pianificato)</span>}
           </div>
-          <MacroBudget label="Proteine" m={dl.macros.p} color={T.blue} />
-          <MacroBudget label="Carboidrati" m={dl.macros.c} color={T.amber} />
+          <MacroBudget label={`Carboidrati${energy.trainingDay ? " ⚡" : ""}`} m={dl.macros.c} color={T.amber} />
+          <MacroBudget label={`Proteine${energy.trainingDay ? "" : " ⚡"}`} m={dl.macros.p} color={T.blue} />
           <MacroBudget label="Grassi" m={dl.macros.f} color={T.purple} />
+          <div style={{ fontSize: 11, color: T.mut, marginTop: 6 }}>
+            ⚡ priorità del giorno: {energy.trainingDay ? "carboidrati (allenamento)" : "proteine (riposo)"}.
+          </div>
           {energy.adapt !== 0 && (
             <div style={{ fontSize: 11.5, color: T.amber, marginTop: 10 }}>
               ⚖️ Target adattato: {energy.adapt > 0 ? "+" : ""}{energy.adapt} kcal sul mantenimento ({energy.maintenance}).
@@ -179,6 +186,76 @@ export default function Home() {
         <Button full variant="ghost" onClick={() => nav("/alimentazione")}>🍎 Cibo</Button>
       </div>
     </div>
+  );
+}
+
+function DayPlanCard({ date, weight, activity }) {
+  const plan = useStore((s) => getDayPlan(s, date));
+  const [open, setOpen] = useState(false);
+  const w = Number(weight) || 75;
+  const cur = plan?.workout;
+  const curType = cur ? WORKOUT_TYPES.find((t) => t.key === cur.type) : null;
+
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <SectionLabel>PROGRAMMA DI OGGI</SectionLabel>
+        <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: "none", color: T.blue, fontSize: 13, fontWeight: 700 }}>
+          {cur ? "Cambia" : "Imposta"} {open ? "▴" : "▾"}
+        </button>
+      </div>
+
+      {cur ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+          <span style={{ fontSize: 26 }}>{curType?.emoji}</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>{curType?.label}</div>
+            <div style={{ fontSize: 12, color: T.mut }}>
+              {cur.minutes ? `${cur.minutes} min · ` : ""}
+              {cur.estBurn ? `~${cur.estBurn} kcal stimate` : "nessun consumo extra"}
+              {activity.doneBurn > 0 ? ` · svolto ${activity.doneBurn} kcal` : ""}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 12.5, color: T.mut, marginTop: 6 }}>
+          Imposta che allenamento farai: bilancio e macro si calcolano già da ora.
+        </div>
+      )}
+
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            {WORKOUT_TYPES.map((t) => (
+              <Chip
+                key={t.key}
+                active={cur?.type === t.key}
+                onClick={() => setDayWorkout(date, t.key, t.defMin, w)}
+              >
+                {t.emoji} {t.label}
+              </Chip>
+            ))}
+          </div>
+          {cur && curType?.met > 0 && (
+            <div>
+              <div style={{ fontSize: 11, color: T.mut, marginBottom: 6 }}>
+                DURATA: {cur.minutes} min (~{cur.estBurn} kcal)
+              </div>
+              <input
+                type="range" min="10" max="150" step="5" value={cur.minutes}
+                onChange={(e) => setDayWorkout(date, cur.type, Number(e.target.value), w)}
+                style={{ width: "100%" }}
+              />
+            </div>
+          )}
+          {cur && (
+            <button onClick={() => clearDayWorkout(date)} style={{ background: "none", border: "none", color: T.coral, fontSize: 12.5, marginTop: 8 }}>
+              ✕ Rimuovi programma
+            </button>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 

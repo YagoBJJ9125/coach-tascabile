@@ -3,6 +3,7 @@
 import { round } from "./format.js";
 import { sumDayFood } from "./nutrition.js";
 import { todayKey, addDays } from "./format.js";
+import { getDayPlan } from "./dayplan.js";
 
 const KCAL_PER_KG = 7700;
 
@@ -14,12 +15,38 @@ export function exerciseCredit(state, date) {
   return { burn: round(burn), credit: round(burn * 0.5) };
 }
 
-// daily energy ledger: budget − food + exercise = remaining (+ per-macro budgets)
+// Attività del giorno: il MAX tra burn pianificato (dayPlan) e burn realmente svolto.
+// Così il budget è noto dal mattino (pianificato) ma non scende mai sotto il fatto.
+export function activityCredit(state, date) {
+  const done = exerciseCredit(state, date).burn;
+  const plan = getDayPlan(state, date);
+  const planned = round(plan?.workout?.estBurn || 0);
+  const burn = Math.max(done, planned);
+  return {
+    doneBurn: done,
+    plannedBurn: planned,
+    planned: planned > 0 && done < planned, // budget ancora basato sul piano
+    burn: round(burn),
+    credit: round(burn * 0.5),
+  };
+}
+
+// is `date` a training day? (allenamento pianificato o già svolto)
+export function isTrainingDay(state, date) {
+  const plan = getDayPlan(state, date);
+  if (plan?.workout) return !!plan.workout.training;
+  return state.sessions.some(
+    (s) => s.finished && s.date === date && Object.keys(s.muscles || {}).length
+  );
+}
+
+// daily energy ledger. NB: `energy.target` include già il credito attività (vedi
+// energyPlan({activityKcal})), quindi qui NON va ri-aggiunto: remaining = budget − cibo.
 export function dayLedger(state, date, energy) {
   const eaten = sumDayFood(state.foodLog[date]);
-  const { burn, credit } = exerciseCredit(state, date);
+  const activity = activityCredit(state, date);
   const budget = energy ? energy.target : 0;
-  const remaining = round(budget - eaten.kcal + credit);
+  const remaining = round(budget - eaten.kcal);
   const macros = energy
     ? {
         p: { eaten: round(eaten.p), target: energy.proteinG },
@@ -27,7 +54,16 @@ export function dayLedger(state, date, energy) {
         f: { eaten: round(eaten.f), target: energy.fatG },
       }
     : null;
-  return { date, budget, eaten, exercise: { burn, credit }, remaining, macros };
+  return {
+    date,
+    budget,
+    restTarget: energy ? energy.restTarget : 0,
+    eaten,
+    activity,
+    exercise: { burn: activity.burn, credit: activity.credit }, // alias compat
+    remaining,
+    macros,
+  };
 }
 
 // weekly ledger: avg intake vs maintenance → cumulative balance → projected kg/week

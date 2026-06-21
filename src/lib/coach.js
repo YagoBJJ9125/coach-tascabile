@@ -40,10 +40,17 @@ export function weeklyRateTarget(profile) {
 
 // Full energy + macro plan, ADAPTIVE on the measured weight trend.
 // trend = { perWeek } from progress.weightTrend(), or null.
-export function energyPlan(profile, { trend = null, trainedStrength = false } = {}) {
+// trainingDay = giorno di allenamento (pianificato o svolto) → split macro carb-priority.
+// activityKcal = kcal accreditate dall'allenamento (pianificato o fatto): entrano nel
+//   target SIN DAL MATTINO, così sai quanto mangiare in giornata senza rincorrere a sera.
+export function energyPlan(
+  profile,
+  { trend = null, trainedStrength = false, trainingDay = false, activityKcal = 0 } = {}
+) {
   const maint = maintenance(profile);
   if (!maint) return null;
   const weight = Number(profile.weight);
+  const isTrainingDay = !!(trainingDay || trainedStrength);
 
   const rateKgWk = weeklyRateTarget(profile);
   const baseDailyAdj = round((rateKgWk * KCAL_PER_KG) / 7);
@@ -80,18 +87,26 @@ export function energyPlan(profile, { trend = null, trainedStrength = false } = 
   }
   target += adapt;
 
-  // floor & macros
+  // floor sul fabbisogno a riposo (l'attività si aggiunge sopra)
   const floor = profile.sex === "donna" ? 1200 : 1500;
   const flooredAtMin = target < floor;
   if (flooredAtMin) target = floor;
+  const restTarget = round(target);
 
-  let protPerKg = 1.8;
-  if (trainedStrength) protPerKg = 2;
+  // budget totale del giorno = riposo + kcal accreditate dall'allenamento
+  const activity = round(activityKcal);
+  target = round(restTarget + activity);
+
+  // --- split macro: allenamento → più carboidrati; riposo → più proteine ---
+  // Proteine per kg
+  let protPerKg = isTrainingDay ? 1.8 : 2.1; // riposo privilegia proteine
   if (profile.goal === "dimagrire") protPerKg = Math.max(protPerKg, 2.2);
-  if (profile.goal === "aumentare" && trainedStrength) protPerKg = 2.1;
+  if (profile.goal === "aumentare") protPerKg = isTrainingDay ? 2.0 : 2.1;
+  // Grassi: % più alta a riposo (meno carbo), più bassa in allenamento (carb-priority)
+  const fatPct = isTrainingDay ? 0.25 : 0.3;
 
   const proteinG = round(protPerKg * weight);
-  const fatG = round(Math.max(0.8 * weight, (target * 0.25) / 9));
+  const fatG = round(Math.max(0.8 * weight, (target * fatPct) / 9));
   const carbsKcal = Math.max(target - proteinG * 4 - fatG * 9, target * 0.15);
   const carbsG = round(carbsKcal / 4);
   const fiberG = round((target / 1000) * 14); // 14 g per 1000 kcal
@@ -102,6 +117,9 @@ export function energyPlan(profile, { trend = null, trainedStrength = false } = 
     baseDailyAdj,
     adapt,
     adaptReason,
+    restTarget,
+    activityKcal: activity,
+    trainingDay: isTrainingDay,
     target,
     flooredAtMin,
     protPerKg,

@@ -242,6 +242,151 @@ Rispondi ESCLUSIVAMENTE con JSON valido, senza testo prima o dopo, in questo for
   return { name: parsed.nome || "Scheda AI", items };
 }
 
+// ---- Scansione scontrino (vision) ---------------------------------------
+// Manda la foto dello scontrino al provider (se supporta immagini) e si fa
+// restituire l'elenco dei prodotti alimentari, da matchare poi sul DB.
+const RECEIPT_PROMPT = `Questa è la foto di uno scontrino/ricevuta della spesa.
+Elenca SOLO i prodotti ALIMENTARI e le bevande acquistati. Ignora prezzi, sconti, totali,
+IVA, e articoli non alimentari (detersivi, ecc.). Per ogni voce indica un nome GENERICO in
+italiano (es. "MOZ.S.LUCIA 125" → "mozzarella"; "BISCOTTI ORO" → "biscotti") e, se deducibile,
+la quantità (grammi/pezzi).
+Rispondi ESCLUSIVAMENTE con JSON valido, senza testo prima o dopo, in questo formato:
+{"items":[{"nome":"mozzarella","quantita":"125g"}]}`;
+
+const VISION_CAPABLE = { gemini: true, anthropic: true, openrouter: true, ollama: true };
+
+export function providerSupportsVision(key) {
+  return !!VISION_CAPABLE[key];
+}
+
+function parseDataUrl(dataUrl) {
+  const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl || "");
+  if (!m) return null;
+  return { mime: m[1], b64: m[2] };
+}
+
+async function visionAnthropic(dataUrl, prompt, settings) {
+  const key = settings.aiKey?.trim();
+  if (!key) throw noKey();
+  const p = parseDataUrl(dataUrl);
+  if (!p) throw new Error("Immagine non valida.");
+  const model = settings.aiModel || PROVIDERS.anthropic.models[1];
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: p.mime, data: p.b64 } },
+          { type: "text", text: prompt },
+        ],
+      }],
+    }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  const data = await res.json();
+  return (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+}
+
+async function visionGemini(dataUrl, prompt, settings) {
+  const key = settings.aiKey?.trim();
+  if (!key) throw noKey();
+  const p = parseDataUrl(dataUrl);
+  if (!p) throw new Error("Immagine non valida.");
+  const model = settings.aiModel || PROVIDERS.gemini.models[0];
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          role: "user",
+          parts: [{ inlineData: { mimeType: p.mime, data: p.b64 } }, { text: prompt }],
+        }],
+      }),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  const data = await res.json();
+  return (data?.candidates?.[0]?.content?.parts || []).map((x) => x.text).join("\n");
+}
+
+async function visionOpenRouter(dataUrl, prompt, settings) {
+  const key = settings.aiKey?.trim();
+  if (!key) throw noKey();
+  const model = settings.aiModel || PROVIDERS.openrouter.models[0];
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ],
+      }],
+    }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content || "";
+}
+
+async function visionOllama(dataUrl, prompt, settings) {
+  const url = (settings.ollamaUrl || "http://localhost:11434").replace(/\/$/, "");
+  const model = settings.ollamaModel || "gemma3";
+  const p = parseDataUrl(dataUrl);
+  if (!p) throw new Error("Immagine non valida.");
+  let res;
+  try {
+    res = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        messages: [{ role: "user", content: prompt, images: [p.b64] }],
+      }),
+    });
+  } catch (e) {
+    const err = new Error("Ollama non raggiungibile su " + url + ".");
+    err.code = "OLLAMA_DOWN";
+    throw err;
+  }
+  if (!res.ok) throw new Error(await readError(res));
+  const data = await res.json();
+  return data?.message?.content || "";
+}
+
+// dataUrl: "data:image/jpeg;base64,..." → [{nome, quantita}]
+export async function scanReceipt(dataUrl, settings) {
+  const provider = settings?.aiProvider || "ollama";
+  let raw;
+  switch (provider) {
+    case "gemini": raw = await visionGemini(dataUrl, RECEIPT_PROMPT, settings); break;
+    case "anthropic": raw = await visionAnthropic(dataUrl, RECEIPT_PROMPT, settings); break;
+    case "openrouter": raw = await visionOpenRouter(dataUrl, RECEIPT_PROMPT, settings); break;
+    case "ollama":
+    default: raw = await visionOllama(dataUrl, RECEIPT_PROMPT, settings); break;
+  }
+  const parsed = extractJSON(raw);
+  const items = parsed && Array.isArray(parsed.items) ? parsed.items : [];
+  return items
+    .map((x) => ({ nome: String(x.nome || x.name || "").trim(), quantita: String(x.quantita || x.quantità || x.qty || "").trim() }))
+    .filter((x) => x.nome);
+}
+
 // deterministic reply (no provider configured / fallback) — uses numeric context directly
 export function localCoachReply() {
   const ctx = buildCoachContext(getState());

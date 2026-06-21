@@ -1,7 +1,7 @@
 // Builds the full numeric context for the AI Coach from the app state.
 // The model receives THESE numbers and must reason on them (not invent).
 import { energyPlan, recommendations, maintenance } from "./coach.js";
-import { dayLedger, weekLedger, fridgeCoverage, shoppingGap } from "./ledger.js";
+import { dayLedger, weekLedger, fridgeCoverage, shoppingGap, activityCredit, isTrainingDay } from "./ledger.js";
 import { weightTrend } from "./progress.js";
 import { readiness } from "./sleep.js";
 import { levelForPoints } from "./progression.js";
@@ -14,10 +14,9 @@ export function buildCoachContext(state) {
   const { profile, sessions, fridge, prefs } = state;
   const today = todayKey();
   const trend = weightTrend();
-  const trainedStrength = sessions.some(
-    (s) => s.finished && s.date === today && Object.keys(s.muscles || {}).length
-  );
-  const energy = energyPlan(profile, { trend, trainedStrength });
+  const activity = activityCredit(state, today);
+  const trainingDay = isTrainingDay(state, today);
+  const energy = energyPlan(profile, { trend, trainingDay, activityKcal: activity.credit });
   const dl = dayLedger(state, today, energy);
   const wl = weekLedger(state, energy);
   const fc = fridgeCoverage(fridge, energy);
@@ -51,12 +50,15 @@ export function buildCoachContext(state) {
       pesoObiettivoKg: profile.goalWeight || null, obiettivoSonnoH: profile.sleepGoal,
     },
     energia: energy && {
-      mantenimentoKcal: energy.maintenance, targetKcal: energy.target,
+      mantenimentoKcal: energy.maintenance, targetBaseKcal: energy.restTarget,
+      kcalAllenamento: energy.activityKcal, targetKcal: energy.target,
+      giornoAllenamento: energy.trainingDay, prioritaMacro: energy.trainingDay ? "carboidrati" : "proteine",
       tassoObiettivoKgSett: energy.rateKgWk, adattamentoKcal: energy.adapt,
       proteineG: energy.proteinG, carboidratiG: energy.carbsG, grassiG: energy.fatG, fibraG: energy.fiberG,
     },
     oggi: energy && {
-      kcalRimanenti: dl.remaining, kcalMangiate: dl.eaten.kcal, kcalBruciate: dl.exercise.burn,
+      kcalRimanenti: dl.remaining, kcalMangiate: dl.eaten.kcal,
+      kcalAllenamento: dl.activity.burn, allenamentoPianificato: dl.activity.planned,
       proteine: dl.macros.p, carboidrati: dl.macros.c, grassi: dl.macros.f,
     },
     settimana: wl && {
@@ -88,7 +90,7 @@ export function contextSummary(ctx) {
   const L = [];
   const e = ctx.energia, o = ctx.oggi;
   if (e) L.push(`🎯 Target oggi ${e.targetKcal} kcal (mantenimento ${e.mantenimentoKcal}, obiettivo ${e.tassoObiettivoKgSett > 0 ? "+" : ""}${e.tassoObiettivoKgSett} kg/sett). Proteine ${e.proteineG} g, carbo ${e.carboidratiG} g, grassi ${e.grassiG} g.`);
-  if (o) L.push(`🍽️ Oggi: ${o.kcalRimanenti} kcal rimanenti (mangiate ${o.kcalMangiate}, bruciate ${o.kcalBruciate}). Proteine ${o.proteine.eaten}/${o.proteine.target} g.`);
+  if (o) L.push(`🍽️ Oggi: ${o.kcalRimanenti} kcal rimanenti (mangiate ${o.kcalMangiate}, allenamento ${o.kcalAllenamento}${o.allenamentoPianificato ? " pianificato" : ""}). Proteine ${o.proteine.eaten}/${o.proteine.target} g.`);
   if (ctx.sonno) L.push(`😴 Prontezza ${ctx.sonno.prontezza}/100 (${ctx.sonno.livelloProntezza}). Sonno medio ${ctx.sonno.media7ggH} h, debito ${ctx.sonno.debitoH} h.`);
   if (ctx.peso?.trendKgSett != null) L.push(`⚖️ Peso ${ctx.peso.attualeKg} kg, trend ${ctx.peso.trendKgSett > 0 ? "+" : ""}${ctx.peso.trendKgSett} kg/sett.`);
   L.push(`💪 Rank muscoli: ${ctx.muscoli.map((m) => `${m.gruppo} ${m.rank}`).join(", ")}.`);

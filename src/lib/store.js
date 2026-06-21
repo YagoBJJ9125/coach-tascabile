@@ -57,6 +57,7 @@ export const DEFAULT_STATE = {
   foodLog: {}, // dateKey -> {colazione:[],pranzo:[],cena:[],spuntino:[],nonclass:[]}
   foodsCustom: [], // user foods
   recentFoods: [], // last logged foodIds (most recent first)
+  dayPlan: {}, // dateKey -> { workout: {type, minutes, estBurn, training} } — pianificazione giornata
   fridge: [], // inventory {id,name,emoji,grams,per100,kcal,p,c,f}
   coachChat: [], // {role,text,routineId?,error?} cronologia chat coach (persistente)
   prefs: {

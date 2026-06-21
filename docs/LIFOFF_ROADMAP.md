@@ -237,7 +237,8 @@ Tutto ragionato coi numeri. `src/lib/ledger.js` + `src/lib/fridge.js`:
 - [x] **Frigo/Dispensa** (`store.fridge`): inventario con valori nutrizionali, totali
 - [x] Copertura frigo: quanti giorni di kcal/proteine ho disponibili
 - [x] **Gap spesa**: per coprire N giorni mancano X kcal/macro → suggerimenti alimenti per colmare le proteine
-- [ ] TODO: storico bilanci, costo/€ (era in v1), pianificazione pasti dal frigo, orizzonte multi-giorno
+- [x] **Pianificazione pasti dal frigo** → vedi EPIC 17 (consigli pasto da DB+frigo).
+- [ ] TODO: storico bilanci, costo/€ (era in v1), orizzonte multi-giorno
 
 > Nota: l'**AI Coach (EPIC 12)** si appoggerà a questi due moduli — riceve i numeri di
 > coach.js/ledger.js come contesto e li spiega/affina, invece di inventare.
@@ -277,6 +278,43 @@ miglioramento (punti → rank per muscolo → avatar). `src/lib/progression.js` 
   causa "sonno"); incluso nel bilancio mensile. Coach consiglia su debito/recupero. Verificato.
 - [ ] Ancora FASE 3: tuning numerico soglie sul campo, più nutrienti (ultra-processati/alcol),
   bilancio annuale, avatar illustrato/3D, stress/HRV come variabili.
+
+## EPIC 17 — Pianificazione giornata & pasti consigliati 🍽️ (FATTO base, 2026-06-21)
+Il bilancio non si aggiorna più solo a fine giornata: si **programma dal mattino** e i
+pasti si consigliano/ricalcolano coi numeri. File: `src/lib/dayplan.js`, `src/lib/meals.js`,
+modifiche a `coach.js` (energyPlan), `ledger.js`, `Home.jsx`, `Alimentazione.jsx`.
+- [x] **Frigo = stesso DB dei pasti**: il frigo ora usa la ricerca condivisa (DB locale +
+  OpenFoodFacts online + codice a barre) con selettore porzione → aggiunge all'inventario.
+  Verificato live (ricerca "tonno" → 80 g nel frigo).
+- [x] **Programma di oggi** (`dayPlan[data]`): scegli al mattino il tipo di allenamento
+  (riposo/leggero/forza/cardio/misto); stima il consumo (MET × peso × durata) con slider durata.
+  Card in Home. Verificato (Cardio 45' → ~480 kcal, credito +240).
+- [x] **Bilancio anticipato**: `energyPlan` ora include il credito attività **pianificato**
+  (max tra pianificato e svolto, così la sera non costringe a mangiare tutto in fretta) →
+  budget e macro noti dal mattino. `ledger.activityCredit`/`isTrainingDay`. Verificato
+  (rimanenti 2759→2999 impostando Cardio).
+- [x] **Macro per tipo di giorno**: giorno di allenamento → **più carboidrati**; riposo →
+  **più proteine** (proteine/kg e % grassi variabili). Etichetta priorità ⚡ in Home/Alim.
+  Verificato (riposo P168 g; allenamento priorità carbo).
+- [x] **Pasti consigliati** (`mealPlan`/`composeMeal`): distribuisce il target su
+  Colazione/Pranzo/Spuntino/Cena e compone ogni pasto da DB+frigo (proteina magra → carbo
+  amidaceo → riempitivo) centrando le kcal del pasto. Pulsante "Aggiungi <pasto>".
+  Verificato (colazione 759/750, pranzo 1056/1050 kcal).
+- [x] **Ricalcolo reattivo**: se mangi/loggi qualcosa di diverso, i macro rimanenti e i pasti
+  successivi si ricalcolano da soli. Verificato (accettata colazione → pranzo ridistribuito,
+  rimanenti 2999→2240).
+- [x] **Scan scontrino** (`ai.js` `scanReceipt` + `src/lib/receipt.js`): foto → AI **vision**
+  multi-provider (Gemini/Anthropic/OpenRouter/Ollama; immagine inline) → estrae i prodotti
+  alimentari (JSON) → match sul DB (`matchReceipt`, punteggio nome + parse grammi) → riepilogo
+  con "＋" per riga / "aggiungi tutti gli abbinati"; non abbinati → "cerca a mano". Pulsante
+  "📷 Scansiona scontrino" nel frigo, input camera. Verificato LIVE con Ollama gemma3
+  (scontrino sintetico → 3 prodotti, "biscotti" abbinato e aggiunto). Fallback chiaro senza chiave.
+- [x] **Target grassi nei consigli**: aggiunta "ancora grassi" (olio/burro/frutta secca, pochi
+  g) quando i grassi del pasto sono sotto target. Verificato (colazione G21/23, pranzo con olio).
+- [x] **Seed colazione** ampliato (fette biscottate, biscotti, marmellata, miele, cornflakes,
+  burro/burro d'arachidi, crema cacao, yogurt frutta, succo) → consigli colazione realistici.
+- [ ] TODO: preferenze quote pasti personalizzabili; consiglio che rispetta allergie/gusti;
+  cache locale cibi OFF; modello vision migliore per scontrini reali (gemma3 su foto vere va testato).
 
 ## Ordine consigliato d'attacco (proposta)
 1. **Mini-pass PWA** (EPIC 11) → subito "installabile", morale alto.
