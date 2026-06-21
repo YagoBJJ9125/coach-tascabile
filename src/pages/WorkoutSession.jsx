@@ -153,6 +153,11 @@ export default function WorkoutSession() {
       for (const eid of ids) s.exercises.push(makeSessionExercise(eid));
     });
 
+  const markAllDone = () =>
+    updateSession(id, (s) => {
+      for (const ex of s.exercises) for (const st of ex.sets) st.done = true;
+    });
+
   // mark the next not-done set as done; return {name, reps} for the announcement
   const markNextSetDone = () => {
     let info = null;
@@ -420,13 +425,25 @@ export default function WorkoutSession() {
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13 }}>
                   <b className="font-display" style={{ fontSize: 18, color: T.amber }}>~{burnPlanned}</b> kcal previste
-                  {burnDone > 0 && <span style={{ color: T.mut }}> · {burnDone} già bruciate</span>}
+                  {burnDone > 0 && <span style={{ color: T.mut }}> · {burnDone} già fatte</span>}
                 </div>
                 <div style={{ fontSize: 11, color: T.mut, marginTop: 2 }}>
                   +{burnCredit} al budget di oggi (50% del consumo stimato)
                 </div>
               </div>
+              {!session.finished && (
+                <button onClick={markAllDone} style={pill} title="Segna tutte le serie come fatte">
+                  ✓ Tutte
+                </button>
+              )}
             </div>
+            {!session.finished && (
+              <div style={{ fontSize: 10.5, color: T.mut2, marginTop: 8, lineHeight: 1.4 }}>
+                💡 Le kcal previste sono già nel tuo budget di oggi e nei pasti consigliati: non serve
+                spuntare le serie per il pre-conteggio. Spunta ✓ ciò che fai davvero (conta per i rank);
+                premi “Finisci” a fine allenamento.
+              </div>
+            )}
           </div>
         )}
 
@@ -669,8 +686,8 @@ function ExerciseCard({ ex, weight = 75, onUpdateSet, onToggleDone, onAddSet, on
 
   const grid =
     tracks === "weight_reps"
-      ? "28px 1fr 1fr 1fr 64px"
-      : "28px 1fr 1fr 64px";
+      ? "26px 1fr 1fr 1fr 104px"
+      : "26px 1fr 1fr 104px";
 
   return (
     <div
@@ -801,8 +818,6 @@ function SetRow({ n, set, tracks, grid, onChange, onToggle, onDuplicate, onRemov
         alignItems: "center",
         marginBottom: 6,
       }}
-      onDoubleClick={onRemove}
-      title="Doppio click per rimuovere serie"
     >
       <div style={{ textAlign: "center", fontWeight: 700, color: T.mut }}>{n}</div>
       <div style={{ textAlign: "center", color: T.mut2, fontSize: 13 }}>{prevTxt}</div>
@@ -820,7 +835,17 @@ function SetRow({ n, set, tracks, grid, onChange, onToggle, onDuplicate, onRemov
           {numInput("timeSec", "sec")}
         </>
       )}
-      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: 5, justifyContent: "flex-end" }}>
+        <button
+          onClick={onRemove}
+          title="Elimina serie"
+          style={{
+            width: 26, height: 36, borderRadius: 8, border: "1px solid var(--line)",
+            background: "var(--surface2)", color: T.coral, fontSize: 14,
+          }}
+        >
+          ✕
+        </button>
         <button
           onClick={onDuplicate}
           title="Duplica serie"
@@ -833,6 +858,7 @@ function SetRow({ n, set, tracks, grid, onChange, onToggle, onDuplicate, onRemov
         </button>
         <button
           onClick={onToggle}
+          title="Serie fatta"
           style={{
             width: 36, height: 36, borderRadius: "50%", border: "none",
             background: set.done ? T.green : "var(--surface3)",

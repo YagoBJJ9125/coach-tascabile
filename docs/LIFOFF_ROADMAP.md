@@ -336,8 +336,17 @@ modifiche a `coach.js` (energyPlan), `ledger.js`, `Home.jsx`, `Alimentazione.jsx
   priorità macro → carboidrati).
 - [x] **Bilancio Home più chiaro**: rimossa la riga criptica "X base + Y allenamento − Z cibo";
   ora righe etichettate (Fabbisogno base / Allenamento (50% del bruciato) / Cibo già mangiato).
+- [x] **Burn per-serie sensibile a reps e carico** (`workout.setBurn`): durata = reps × ~4s →
+  MET-ore; il carico aumenta il MET `clamp(1+kg/max(40,bw),1,3)` come i punti rank. Verificato
+  (piegamenti 10→~4 / 20→~7 kcal; curl 10 reps 3kg→~5 / 20kg→~6).
+- [x] **Tasto elimina serie** (✕) reale in ogni riga; rimosso il doppio-click (era percepito come
+  bug). **"✓ Tutte"**: segna tutte le serie come fatte in un colpo. Verificato.
+- [x] **Pre-conteggio del piano senza spuntare**: il budget e i pasti consigliati includono già le
+  kcal previste della sessione pianificata (non finita), anche senza spuntare le serie. Spuntare
+  serve solo a tracciare ciò che fai davvero (rank). Nota esplicativa in WorkoutSession. Verificato
+  (serie non spuntata → budget +4 comunque).
 - [ ] TODO: ripristinare anche XP/streak/PR su elimina (ora solo punti rank); modifica serie di una
-  sessione finita senza riaprirla; stima burn per-serie sensibile a reps/carico (ora ~45s fissi).
+  sessione finita senza riaprirla; spread carico più marcato per i grossi sollevamenti se richiesto.
 
 ## Ordine consigliato d'attacco (proposta)
 1. **Mini-pass PWA** (EPIC 11) → subito "installabile", morale alto.
