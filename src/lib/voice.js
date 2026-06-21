@@ -140,19 +140,65 @@ export function parseSecondsFromAlts(alts) {
   return null;
 }
 
-export function classifyCommand(text) {
-  const t = (text || "").toLowerCase();
-  if (/(imposta riposo|imposta pausa|riposo di|pausa di|metti riposo|cambia riposo)/.test(t)) return "set_rest";
-  if (/(fine serie|serie finita|serie fatta|finit|fatto|completat|ho finito|ok serie)/.test(t)) return "set_done";
-  if (/(prossimo|avanti|cambia esercizio|esercizio successivo)/.test(t)) return "next_ex";
-  if (/(salta riposo|salta pausa|stop riposo|togli riposo)/.test(t)) return "skip_rest";
-  if (/(finisci allenamento|termina allenamento|ho finito tutto|chiudi allenamento)/.test(t)) return "finish";
-  if (/(stop|basta|ferma|spegni|pausa ascolto)/.test(t)) return "stop";
-  return null;
+// dizionari di sinonimi (interpretazione "morbida", non frasi esatte)
+const REST_WORDS = ["riposo", "riposa", "riposati", "pausa", "recupero", "recupera", "pausetta"];
+const DONE_WORDS = ["fine serie", "finit", "fatt", "complet", "chius", "ho finito", "serie ok", "ok serie", "andata", "presa", "serie fatta", "done", "eseguit"];
+const NEXT_WORDS = ["prossimo", "avanti", "successiv", "cambia esercizio", "nuovo esercizio", "vai avanti"];
+const SKIP_WORDS = ["salta", "togli riposo", "niente riposo", "no riposo", "annulla riposo"];
+const FINISH_WORDS = ["finisci allenamento", "termina", "ho finito tutto", "chiudi allenamento", "basta allenamento", "fine allenamento"];
+const STOP_WORDS = ["stop", "ferma", "spegni", "pausa ascolto", "smetti", "silenzio"];
+
+export const WAKE_WORDS = ["coach", "coch", "couch", "cocho", "coca", "coace", "cocci", "ok coach", "ehi coach", "ciao coach", "hey coach", "kotch", "coaci"];
+
+function norm(text) {
+  return (text || "").toLowerCase().replace(/[.,!?;:]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-export const WAKE_WORDS = ["coach", "coch", "couch", "cocho", "ok coach", "ehi coach", "ciao coach"];
 export function isWake(text) {
-  const t = (text || "").toLowerCase();
+  const t = norm(text);
   return WAKE_WORDS.some((w) => t.includes(w));
+}
+
+const hasAny = (t, arr) => arr.some((k) => t.includes(k));
+
+// Interpreta una frase libera -> { wake, intent, seconds }
+// Gestisce comandi combinati col wake: "coach riposo 20 secondi".
+export function interpret(text) {
+  const raw = norm(text);
+  const wake = WAKE_WORDS.some((w) => raw.includes(w));
+  // togli le wake-word per analizzare il comando
+  let t = raw;
+  for (const w of WAKE_WORDS) t = t.split(w).join(" ");
+  t = t.replace(/\s+/g, " ").trim();
+
+  const seconds = parseSeconds(t);
+  let intent = null;
+  if (hasAny(t, FINISH_WORDS)) intent = "finish";
+  else if (hasAny(t, SKIP_WORDS)) intent = "skip_rest";
+  else if (hasAny(t, DONE_WORDS)) intent = "set_done"; // "finito"/"fatto" (+ eventuale numero = riposo)
+  else if (hasAny(t, REST_WORDS)) intent = "set_rest"; // "riposo 20", "pausa 60"
+  else if (hasAny(t, NEXT_WORDS)) intent = "next_ex";
+  else if (hasAny(t, STOP_WORDS)) intent = "stop";
+  else if (seconds != null) intent = "set_rest"; // solo un numero = imposta riposo
+  return { wake, intent, seconds, text: t };
+}
+
+// retro-compat
+export function classifyCommand(text) {
+  return interpret(text).intent;
+}
+
+// ---- Wake Lock (tiene lo schermo acceso durante la modalità voce) ----
+let _wakeLock = null;
+export async function acquireWakeLock() {
+  try {
+    if ("wakeLock" in navigator) _wakeLock = await navigator.wakeLock.request("screen");
+  } catch {}
+}
+export function releaseWakeLock() {
+  try { _wakeLock && _wakeLock.release(); } catch {}
+  _wakeLock = null;
+}
+export function hasWakeLockApi() {
+  return typeof navigator !== "undefined" && "wakeLock" in navigator;
 }

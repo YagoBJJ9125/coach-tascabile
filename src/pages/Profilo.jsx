@@ -349,10 +349,12 @@ function VoiceCard({ settings, setSetting }) {
       <Button full variant="ghost" onClick={test}>🔊 Prova voce</Button>
 
       <div style={{ fontSize: 11, color: T.mut, marginTop: 10, lineHeight: 1.5 }}>
-        Comandi: di' <b>"coach"</b> per attivare, poi <b>"fine serie"</b> (spunta e parte il
-        riposo predefinito), <b>"imposta riposo sessanta"</b>, <b>"prossimo esercizio"</b>,
-        <b> "salta riposo"</b>, <b>"finisci allenamento"</b>. La durata riposo di default è
-        quella in Impostazioni Tracker.
+        Puoi dire tutto in una frase: <b>"coach riposo 20 secondi"</b>, <b>"coach finito"</b>,
+        <b> "coach pausa 60"</b>, <b>"coach prossimo"</b>, <b>"coach salta riposo"</b>,
+        <b> "coach finisci allenamento"</b>. Capisce sinonimi (finito/fatto/completato,
+        riposo/pausa/recupero…) e i numeri a voce. La durata di default del riposo è quella
+        in Impostazioni Tracker. Durante la modalità voce lo <b>schermo resta acceso</b>; se
+        blocchi il telefono a mano il microfono si ferma (limite del browser).
       </div>
     </Card>
   );
