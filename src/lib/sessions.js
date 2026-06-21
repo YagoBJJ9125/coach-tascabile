@@ -91,6 +91,50 @@ export function deleteSession(id) {
   });
 }
 
+// annulla l'effetto sui rank di una sessione finita (punti muscolo + log aggregato).
+// XP/streak/PR non vengono ripristinati (effetto minore di gamification).
+function reverseSessionPoints(sess, draft) {
+  if (!sess.musclePoints) return;
+  for (const mk of Object.keys(sess.musclePoints)) {
+    const pts = sess.musclePoints[mk] || 0;
+    if (draft.muscleRanks[mk]) {
+      draft.muscleRanks[mk].points = Math.max(0, (draft.muscleRanks[mk].points || 0) - pts);
+    }
+    const entry = (draft.pointsLog || []).find(
+      (e) => e.date === sess.date && e.muscle === mk && e.cause === "allenamento"
+    );
+    if (entry) entry.delta -= pts;
+  }
+}
+
+// cancella una sessione finita ripristinando i punti (es. confermata per sbaglio)
+export function deleteFinishedSession(id) {
+  setState((s) => {
+    const sess = s.sessions.find((x) => x.id === id);
+    if (sess && sess.finished) reverseSessionPoints(sess, s);
+    s.sessions = s.sessions.filter((x) => x.id !== id);
+    return s;
+  });
+}
+
+// riapri una sessione finita per modificarla: ripristina i punti e la rende editabile;
+// al successivo "Finisci" verranno ricalcolati da capo.
+export function reopenSession(id) {
+  setState((s) => {
+    const sess = s.sessions.find((x) => x.id === id);
+    if (!sess || !sess.finished) return s;
+    reverseSessionPoints(sess, s);
+    sess.finished = false;
+    sess.endedAt = null;
+    sess.durationSec = 0;
+    sess.startedAt = Date.now();
+    sess.burn = 0;
+    sess.muscles = {};
+    sess.musclePoints = {};
+    return s;
+  });
+}
+
 // finalize: compute duration, burn, update PRs, muscle ranks, xp, streak
 export function finishSession(id) {
   const st = getState();

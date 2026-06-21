@@ -4,39 +4,63 @@ import { round } from "./format.js";
 import { sumDayFood } from "./nutrition.js";
 import { todayKey, addDays } from "./format.js";
 import { getDayPlan } from "./dayplan.js";
+import { sessionBurn, sessionBurnAll } from "./workout.js";
 
 const KCAL_PER_KG = 7700;
+const EAT_BACK = 0.5; // % del consumo stimato che si "rimangia" (vedi nota: netto + sovrastima)
 
-// burn credited from finished workouts on a given date (half, like the rest of the app)
+// burn credited from finished workouts on a given date (half) — usato dal bilancio settimanale
 export function exerciseCredit(state, date) {
   const burn = state.sessions
     .filter((s) => s.finished && s.date === date)
     .reduce((n, s) => n + (s.burn || 0), 0);
-  return { burn: round(burn), credit: round(burn * 0.5) };
+  return { burn: round(burn), credit: round(burn * EAT_BACK) };
 }
 
-// Attività del giorno: il MAX tra burn pianificato (dayPlan) e burn realmente svolto.
-// Così il budget è noto dal mattino (pianificato) ma non scende mai sotto il fatto.
+// Attività del giorno calcolata dalle SESSIONI:
+//  - allenamenti finiti → burn reale (serie completate)
+//  - allenamenti pianificati/in corso (non finiti) → stima su TUTTE le serie previste
+// Così il budget è noto dal mattino (pianificato) e si affina mentre completi le serie.
 export function activityCredit(state, date) {
-  const done = exerciseCredit(state, date).burn;
-  const plan = getDayPlan(state, date);
-  const planned = round(plan?.workout?.estBurn || 0);
-  const burn = Math.max(done, planned);
+  const w = Number(state.profile?.weight) || 75;
+  let finishedBurn = 0;
+  let plannedBurn = 0;
+  let doneBurn = 0;
+  let hasOpenPlan = false;
+  for (const s of state.sessions) {
+    if (s.date !== date) continue;
+    if (s.finished) {
+      finishedBurn += s.burn || 0;
+      doneBurn += s.burn || 0;
+    } else {
+      plannedBurn += sessionBurnAll(s, w);
+      doneBurn += sessionBurn(s, w);
+      const total = (s.exercises || []).reduce((n, e) => n + (e.sets?.length || 0), 0);
+      const done = (s.exercises || []).reduce((n, e) => n + (e.sets?.filter((x) => x.done).length || 0), 0);
+      if (total > 0 && done < total) hasOpenPlan = true;
+    }
+  }
+  const burn = round(finishedBurn + plannedBurn);
   return {
-    doneBurn: done,
-    plannedBurn: planned,
-    planned: planned > 0 && done < planned, // budget ancora basato sul piano
-    burn: round(burn),
-    credit: round(burn * 0.5),
+    finishedBurn: round(finishedBurn),
+    plannedBurn: round(plannedBurn),
+    doneBurn: round(doneBurn),
+    planned: hasOpenPlan,            // il budget include una stima non ancora completata
+    burn,                            // consumo lordo previsto oggi (fatto + pianificato)
+    credit: round(burn * EAT_BACK),  // 50% rimangiato
   };
 }
 
-// is `date` a training day? (allenamento pianificato o già svolto)
+// is `date` a training day? (allenamento pianificato o già svolto, salvo "Riposo" esplicito)
 export function isTrainingDay(state, date) {
   const plan = getDayPlan(state, date);
-  if (plan?.workout) return !!plan.workout.training;
+  if (plan && plan.rest) return false;
   return state.sessions.some(
-    (s) => s.finished && s.date === date && Object.keys(s.muscles || {}).length
+    (s) => s.date === date && (
+      s.finished
+        ? Object.keys(s.muscles || {}).length > 0
+        : (s.exercises || []).some((e) => (e.sets || []).length > 0)
+    )
   );
 }
 

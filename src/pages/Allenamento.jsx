@@ -5,9 +5,11 @@ import Header from "../components/Header.jsx";
 import { Card, Button, Segmented, EmptyState, Sheet, Input } from "../components/ui.jsx";
 import { T } from "../theme.js";
 import { useStore } from "../lib/store.js";
-import { createSession, deleteRoutine, createRoutine, generatePlan, clearPlan } from "../lib/sessions.js";
+import { createSession, deleteRoutine, createRoutine, generatePlan, clearPlan, deleteFinishedSession, reopenSession } from "../lib/sessions.js";
+import { sessionVolume } from "../lib/workout.js";
 import { coachExercisePool, exerciseById } from "../data/exercises.js";
-import { MUSCLE_GROUPS } from "../data/muscles.js";
+import { MUSCLE_GROUPS, muscleLabel } from "../data/muscles.js";
+import { fmtDateLong, isToday } from "../lib/format.js";
 
 function generateWorkout(goal) {
   // one exercise per muscle group, from the allowed pool (user prefs)
@@ -48,6 +50,7 @@ export default function Allenamento() {
         onChange={setTab}
         options={[
           { value: "tracker", label: "Tracker" },
+          { value: "storico", label: "Storico" },
           { value: "piano", label: "Il mio piano" },
         ]}
       />
@@ -71,7 +74,7 @@ export default function Allenamento() {
         </Card>
       )}
 
-      {tab === "tracker" ? (
+      {tab === "tracker" && (
         <>
           <SectionTitle>Nuovo allenamento</SectionTitle>
           <BigAction emoji="🏋️" label="Inizia un allenamento vuoto" onClick={startEmpty} />
@@ -111,7 +114,11 @@ export default function Allenamento() {
             ))
           )}
         </>
-      ) : (
+      )}
+
+      {tab === "storico" && <HistoryView sessions={sessions} nav={nav} />}
+
+      {tab === "piano" && (
         <PlanView
           plan={plan}
           onGenerate={generatePlan}
@@ -267,5 +274,82 @@ function PlanView({ plan, onGenerate, onClear, onStartDay }) {
         Cancella piano
       </Button>
     </div>
+  );
+}
+
+function HistoryView({ sessions, nav }) {
+  const finished = sessions.filter((s) => s.finished);
+  if (!finished.length) {
+    return (
+      <EmptyState
+        icon="📒"
+        title="Nessun allenamento registrato"
+        sub="Gli allenamenti che completi appariranno qui: potrai rivederli, modificarli o eliminarli se confermati per sbaglio."
+      />
+    );
+  }
+  return (
+    <div>
+      <SectionTitle>Allenamenti svolti</SectionTitle>
+      {finished.map((s) => (
+        <SessionHistoryCard key={s.id} session={s} nav={nav} />
+      ))}
+    </div>
+  );
+}
+
+function SessionHistoryCard({ session, nav }) {
+  const [open, setOpen] = useState(false);
+  const v = sessionVolume(session);
+  const muscles = Object.keys(session.muscles || {});
+
+  const del = () => {
+    if (confirm("Eliminare questo allenamento? I punti rank guadagnati verranno ripristinati.")) {
+      deleteFinishedSession(session.id);
+    }
+  };
+  const edit = () => {
+    if (confirm("Riaprire l'allenamento per modificarlo? Ricordati di ri-confermarlo (✓) a fine modifica.")) {
+      reopenSession(session.id);
+      nav(`/session/${session.id}`);
+    }
+  };
+
+  return (
+    <Card style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{session.title}</div>
+          <div style={{ fontSize: 12, color: T.mut, textTransform: "capitalize" }}>
+            {isToday(session.date) ? "Oggi" : fmtDateLong(session.date)} · {v.sets} serie · ~{session.burn || 0} kcal
+          </div>
+        </div>
+        <span style={{ color: T.mut }}>{open ? "▴" : "▾"}</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+          {muscles.length > 0 && (
+            <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+              Muscoli: {muscles.map(muscleLabel).join(", ")}
+            </div>
+          )}
+          {session.exercises.map((ex) => {
+            const def = exerciseById(ex.exerciseId);
+            const done = ex.sets.filter((x) => x.done).length;
+            return (
+              <div key={ex.id} style={{ fontSize: 13, display: "flex", gap: 8, padding: "3px 0" }}>
+                <span>{def?.emoji || "•"}</span>
+                <span style={{ flex: 1 }}>{def?.name || ex.exerciseId}</span>
+                <span style={{ color: T.mut }}>{done} serie</span>
+              </div>
+            );
+          })}
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <Button full variant="ghost" onClick={edit}>✏️ Modifica</Button>
+            <Button variant="ghost" onClick={del} style={{ color: T.coral }}>🗑 Elimina</Button>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }

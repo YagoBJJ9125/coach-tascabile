@@ -3,23 +3,37 @@ import { round } from "./format.js";
 import { exerciseById, TRACK_MET } from "../data/exercises.js";
 import { RANK_TIERS } from "../theme.js";
 
-// Estimate a session's calorie burn from its sets.
+// Per-set calorie estimate (GROSS). Time/distance use logged seconds; strength/reps
+// assume ~45s of effort per set. Used for live display and planned estimates.
+export function setBurn(def, set, weightKg = 75) {
+  const met = (def && def.met) || (def && TRACK_MET[def.tracks]) || 4;
+  if (def && (def.tracks === "time" || def.tracks === "distance")) {
+    const sec = Number(set.timeSec) || 0;
+    return met * weightKg * (sec / 3600);
+  }
+  // strength/reps set ~ 45s effort
+  return met * weightKg * (45 / 3600);
+}
+
+// Estimate a session's calorie burn from its COMPLETED sets (used at finish).
 export function sessionBurn(session, weightKg = 75) {
   let kcal = 0;
   for (const ex of session.exercises || []) {
     const def = exerciseById(ex.exerciseId);
-    const met = (def && def.met) || (def && TRACK_MET[def.tracks]) || 4;
     for (const s of ex.sets || []) {
       if (!s.done) continue;
-      if (def && def.tracks === "time" && s.timeSec) {
-        kcal += met * weightKg * (s.timeSec / 3600);
-      } else if (def && def.tracks === "distance" && s.timeSec) {
-        kcal += met * weightKg * (s.timeSec / 3600);
-      } else {
-        // strength/reps set ~ 45s effort
-        kcal += met * weightKg * (45 / 3600);
-      }
+      kcal += setBurn(def, s, weightKg);
     }
+  }
+  return round(kcal);
+}
+
+// Burn over ALL sets (done or not) — the planned estimate for a workout you set up.
+export function sessionBurnAll(session, weightKg = 75) {
+  let kcal = 0;
+  for (const ex of session.exercises || []) {
+    const def = exerciseById(ex.exerciseId);
+    for (const s of ex.sets || []) kcal += setBurn(def, s, weightKg);
   }
   return round(kcal);
 }

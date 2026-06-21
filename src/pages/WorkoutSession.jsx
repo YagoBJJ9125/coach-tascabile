@@ -11,6 +11,7 @@ import {
   saveRoutineFromSession,
 } from "../lib/sessions.js";
 import { exerciseById } from "../data/exercises.js";
+import { sessionBurn, sessionBurnAll, setBurn } from "../lib/workout.js";
 import { muscleLabel } from "../data/muscles.js";
 import { uid, fmtClock } from "../lib/format.js";
 import { T } from "../theme.js";
@@ -23,6 +24,7 @@ export default function WorkoutSession() {
   const nav = useNavigate();
   const session = useStore((s) => s.sessions.find((x) => x.id === id));
   const settings = useStore((s) => s.settings);
+  const weight = useStore((s) => Number(s.profile.weight) || 75);
 
   const [elapsed, setElapsed] = useState(0);
   const [picker, setPicker] = useState(false);
@@ -323,6 +325,11 @@ export default function WorkoutSession() {
     0
   );
 
+  // consumo calorico LIVE (lordo): previsto su tutte le serie, fatto sulle completate
+  const burnPlanned = sessionBurnAll(session, weight);
+  const burnDone = sessionBurn(session, weight);
+  const burnCredit = Math.round(burnPlanned * 0.5);
+
   return (
     <div style={{ minHeight: "100vh", paddingBottom: 120 }}>
       {/* top bar */}
@@ -405,6 +412,24 @@ export default function WorkoutSession() {
           }}
         />
 
+        {/* consumo calorico live */}
+        {session.exercises.length > 0 && (
+          <div style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 14, padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 22 }}>🔥</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13 }}>
+                  <b className="font-display" style={{ fontSize: 18, color: T.amber }}>~{burnPlanned}</b> kcal previste
+                  {burnDone > 0 && <span style={{ color: T.mut }}> · {burnDone} già bruciate</span>}
+                </div>
+                <div style={{ fontSize: 11, color: T.mut, marginTop: 2 }}>
+                  +{burnCredit} al budget di oggi (50% del consumo stimato)
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {session.exercises.length === 0 && (
           <div
             style={{
@@ -419,7 +444,7 @@ export default function WorkoutSession() {
             <div style={{ fontSize: 36, marginBottom: 8 }}>💪</div>
             <div style={{ fontWeight: 700, color: T.text }}>Allenamento vuoto</div>
             <div style={{ fontSize: 13, marginTop: 4 }}>
-              Aggiungi esercizi per iniziare.
+              Aggiungi esercizi: vedrai subito le calorie che consumeranno.
             </div>
           </div>
         )}
@@ -428,6 +453,7 @@ export default function WorkoutSession() {
           <ExerciseCard
             key={ex.id}
             ex={ex}
+            weight={weight}
             onUpdateSet={updateSet}
             onToggleDone={toggleDone}
             onAddSet={addSet}
@@ -625,10 +651,11 @@ function Stat({ label, value, color }) {
   );
 }
 
-function ExerciseCard({ ex, onUpdateSet, onToggleDone, onAddSet, onDuplicateSet, onRemoveSet, onRemove }) {
+function ExerciseCard({ ex, weight = 75, onUpdateSet, onToggleDone, onAddSet, onDuplicateSet, onRemoveSet, onRemove }) {
   const def = exerciseById(ex.exerciseId);
   const tracks = def?.tracks || "weight_reps";
   const [menu, setMenu] = useState(false);
+  const exBurn = Math.round(ex.sets.reduce((n, s) => n + setBurn(def, s, weight), 0));
 
   // columns by track type
   const cols =
@@ -660,6 +687,9 @@ function ExerciseCard({ ex, onUpdateSet, onToggleDone, onAddSet, onDuplicateSet,
         <span style={{ flex: 1, fontWeight: 700, fontSize: 15 }}>
           {def?.name || ex.exerciseId}
         </span>
+        {exBurn > 0 && (
+          <span style={{ fontSize: 12, color: T.amber, fontWeight: 700, marginRight: 4 }}>🔥 ~{exBurn}</span>
+        )}
         <button
           onClick={() => setMenu((m) => !m)}
           style={{ background: "none", border: "none", color: T.mut, fontSize: 20 }}

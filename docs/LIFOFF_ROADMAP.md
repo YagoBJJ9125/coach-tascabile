@@ -316,6 +316,29 @@ modifiche a `coach.js` (energyPlan), `ledger.js`, `Home.jsx`, `Alimentazione.jsx
 - [ ] TODO: preferenze quote pasti personalizzabili; consiglio che rispetta allergie/gusti;
   cache locale cibi OFF; modello vision migliore per scontrini reali (gemma3 su foto vere va testato).
 
+## EPIC 18 — Storico allenamenti, consumo live, piano = allenamento reale (FATTO, 2026-06-21)
+- [x] **Storico allenamenti** (Allenamento → segmento "Storico"): lista degli allenamenti
+  svolti (data/serie/kcal/muscoli), espandibili. **Elimina** con ripristino punti rank
+  (`deleteFinishedSession` → reversal su muscleRanks/pointsLog) per quando confermi per sbaglio.
+  **Modifica** = `reopenSession` (riapre, ripristina punti, da ri-confermare). Verificato LIVE
+  (elimina: sessione 1→0, petto 120→0, braccia 60→0).
+- [x] **Consumo calorico LIVE in allenamento** (`workout.setBurn/sessionBurnAll`): barra in
+  WorkoutSession con kcal previste (tutte le serie) + già bruciate (serie fatte) + "+X al budget
+  (50%)"; kcal stimate per ogni esercizio (🔥). Verificato (4 serie → ~20 kcal, +10 al budget).
+- [x] **Algoritmo calorie**: si "rimangia" il **50%** del consumo stimato (EAT_BACK in ledger).
+  Motivo: stima lorda vs netta (−1 MET a riposo), il fattore attività del TDEE include già
+  l'allenamento (doppio conteggio), e MET/wearable sovrastimano del 20-50%. NON 1:1.
+- [x] **Programma di oggi = allenamento reale** (no più tipi generici leggero/forza/cardio/misto):
+  card unica → "Pianifica allenamento" apre il builder vuoto; la sessione non finita È il piano di
+  oggi (mostra esercizi previsti, kcal che consumeranno, +credito al budget) e si può continuare/
+  modificare. Resta l'opzione "Riposo". `activityCredit` ora deriva dalle sessioni (finite = burn
+  reale; pianificate/in corso = stima su tutte le serie). Verificato (piano → budget 2759→2769,
+  priorità macro → carboidrati).
+- [x] **Bilancio Home più chiaro**: rimossa la riga criptica "X base + Y allenamento − Z cibo";
+  ora righe etichettate (Fabbisogno base / Allenamento (50% del bruciato) / Cibo già mangiato).
+- [ ] TODO: ripristinare anche XP/streak/PR su elimina (ora solo punti rank); modifica serie di una
+  sessione finita senza riaprirla; stima burn per-serie sensibile a reps/carico (ora ~45s fissi).
+
 ## Ordine consigliato d'attacco (proposta)
 1. **Mini-pass PWA** (EPIC 11) → subito "installabile", morale alto.
 2. Completare fasi core mancanti (onboarding mascotte, tastierino tracker, "Il mio piano").

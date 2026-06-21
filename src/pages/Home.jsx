@@ -3,14 +3,15 @@
 import { useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
 import Header from "../components/Header.jsx";
-import { Card, Button, ProgressBar, Chip } from "../components/ui.jsx";
+import { Card, Button, ProgressBar } from "../components/ui.jsx";
 import { T } from "../theme.js";
 import { useStore } from "../lib/store.js";
 import { createSession } from "../lib/sessions.js";
 import { todayKey, fmtDateLong } from "../lib/format.js";
 import { energyPlan, recommendations } from "../lib/coach.js";
 import { dayLedger, weekLedger, fridgeCoverage, activityCredit, isTrainingDay } from "../lib/ledger.js";
-import { WORKOUT_TYPES, getDayPlan, setDayWorkout, clearDayWorkout } from "../lib/dayplan.js";
+import { getDayPlan, setRest } from "../lib/dayplan.js";
+import { sessionBurnAll } from "../lib/workout.js";
 import { weightTrend } from "../lib/progress.js";
 import { readiness } from "../lib/sleep.js";
 
@@ -78,27 +79,37 @@ export default function Home() {
       </button>
 
       {/* ---- programma di oggi ---- */}
-      {energy && <DayPlanCard date={today} weight={profile.weight} activity={activity} />}
+      {energy && <DayPlanCard date={today} sessions={sessions} weight={profile.weight} activity={activity} nav={nav} />}
 
       {/* ---- bilancio di oggi ---- */}
       {energy && (
         <Card style={{ marginBottom: 14 }}>
-          <SectionLabel>BILANCIO DI OGGI {dl.activity.planned && <span style={{ color: T.amber }}>· da piano</span>}</SectionLabel>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
+          <SectionLabel>BILANCIO DI OGGI</SectionLabel>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
             <span className="font-display" style={{ fontSize: 34, fontWeight: 700, color: dl.remaining < 0 ? T.coral : T.blue }}>
               {dl.remaining}
             </span>
-            <span style={{ color: T.mut, fontSize: 13 }}>kcal rimanenti</span>
+            <span style={{ color: T.mut, fontSize: 13 }}>kcal che puoi ancora assumere oggi</span>
           </div>
-          <div style={{ fontSize: 12, color: T.mut, marginBottom: 12 }}>
-            {dl.restTarget} base{dl.activity.credit > 0 ? ` + ${dl.activity.credit} allenamento` : ""} − {dl.eaten.kcal} cibo
-            {dl.activity.planned && <span style={{ color: T.amber }}> (allenamento pianificato)</span>}
-          </div>
+
+          {/* breakdown chiaro ed etichettato */}
+          <BalanceRow label="Fabbisogno base" value={dl.restTarget} />
+          {dl.activity.credit > 0 && (
+            <BalanceRow
+              label="Allenamento"
+              value={`+${dl.activity.credit}`}
+              color={T.green}
+              hint={dl.activity.planned ? "stima del piano · 50% del bruciato" : "50% del bruciato stimato"}
+            />
+          )}
+          <BalanceRow label="Cibo già mangiato" value={`−${dl.eaten.kcal}`} color={T.amber} />
+          <div style={{ borderTop: "1px solid var(--line)", margin: "6px 0 10px" }} />
+
           <MacroBudget label={`Carboidrati${energy.trainingDay ? " ⚡" : ""}`} m={dl.macros.c} color={T.amber} />
           <MacroBudget label={`Proteine${energy.trainingDay ? "" : " ⚡"}`} m={dl.macros.p} color={T.blue} />
           <MacroBudget label="Grassi" m={dl.macros.f} color={T.purple} />
           <div style={{ fontSize: 11, color: T.mut, marginTop: 6 }}>
-            ⚡ priorità del giorno: {energy.trainingDay ? "carboidrati (allenamento)" : "proteine (riposo)"}.
+            ⚡ priorità di oggi: {energy.trainingDay ? "carboidrati (giorno di allenamento)" : "proteine (riposo)"}.
           </div>
           {energy.adapt !== 0 && (
             <div style={{ fontSize: 11.5, color: T.amber, marginTop: 10 }}>
@@ -189,73 +200,103 @@ export default function Home() {
   );
 }
 
-function DayPlanCard({ date, weight, activity }) {
+function DayPlanCard({ date, sessions, weight, activity, nav }) {
   const plan = useStore((s) => getDayPlan(s, date));
-  const [open, setOpen] = useState(false);
   const w = Number(weight) || 75;
-  const cur = plan?.workout;
-  const curType = cur ? WORKOUT_TYPES.find((t) => t.key === cur.type) : null;
+  const today = sessions.filter((s) => s.date === date);
+  const planned = today.filter((s) => !s.finished); // previsto / in corso
+  const done = today.filter((s) => s.finished);
+  const isRest = plan && plan.rest && !planned.length && !done.length;
+
+  const start = () => nav(`/session/${createSession({ title: "Allenamento di oggi" })}`);
 
   return (
     <Card style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <SectionLabel>PROGRAMMA DI OGGI</SectionLabel>
-        <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: "none", color: T.blue, fontSize: 13, fontWeight: 700 }}>
-          {cur ? "Cambia" : "Imposta"} {open ? "▴" : "▾"}
-        </button>
+        {activity.burn > 0 && (
+          <span style={{ fontSize: 11.5, color: T.green, fontWeight: 700 }}>
+            ~{activity.burn} kcal · +{activity.credit} al budget
+          </span>
+        )}
       </div>
 
-      {cur ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-          <span style={{ fontSize: 26 }}>{curType?.emoji}</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 15 }}>{curType?.label}</div>
-            <div style={{ fontSize: 12, color: T.mut }}>
-              {cur.minutes ? `${cur.minutes} min · ` : ""}
-              {cur.estBurn ? `~${cur.estBurn} kcal stimate` : "nessun consumo extra"}
-              {activity.doneBurn > 0 ? ` · svolto ${activity.doneBurn} kcal` : ""}
-            </div>
-          </div>
+      {isRest ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 24 }}>😴</span>
+          <div style={{ flex: 1, fontWeight: 700 }}>Riposo</div>
+          <button onClick={() => setRest(date, false)} style={linkBtn}>annulla</button>
         </div>
-      ) : (
-        <div style={{ fontSize: 12.5, color: T.mut, marginTop: 6 }}>
-          Imposta che allenamento farai: bilancio e macro si calcolano già da ora.
-        </div>
-      )}
-
-      {open && (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-            {WORKOUT_TYPES.map((t) => (
-              <Chip
-                key={t.key}
-                active={cur?.type === t.key}
-                onClick={() => setDayWorkout(date, t.key, t.defMin, w)}
-              >
-                {t.emoji} {t.label}
-              </Chip>
-            ))}
-          </div>
-          {cur && curType?.met > 0 && (
-            <div>
-              <div style={{ fontSize: 11, color: T.mut, marginBottom: 6 }}>
-                DURATA: {cur.minutes} min (~{cur.estBurn} kcal)
-              </div>
-              <input
-                type="range" min="10" max="150" step="5" value={cur.minutes}
-                onChange={(e) => setDayWorkout(date, cur.type, Number(e.target.value), w)}
-                style={{ width: "100%" }}
+      ) : planned.length || done.length ? (
+        <>
+          {planned.map((s) => {
+            const nEx = s.exercises.length;
+            return (
+              <PlanRow
+                key={s.id}
+                emoji="🏋️"
+                title={s.title}
+                sub={nEx ? `${nEx} eserciz${nEx === 1 ? "io" : "i"} · ~${sessionBurnAll(s, w)} kcal previste` : "vuoto · aggiungi esercizi"}
+                cta="Continua ▶"
+                onClick={() => nav(`/session/${s.id}`)}
               />
-            </div>
+            );
+          })}
+          {done.map((s) => (
+            <PlanRow
+              key={s.id}
+              emoji="✅"
+              title={s.title}
+              sub={`fatto · ~${s.burn || 0} kcal bruciate`}
+              cta="Vedi"
+              onClick={() => nav(`/session/${s.id}`)}
+            />
+          ))}
+          {!planned.length && (
+            <Button full variant="ghost" onClick={start} style={{ marginTop: 8 }}>
+              ＋ Pianifica un altro allenamento
+            </Button>
           )}
-          {cur && (
-            <button onClick={() => clearDayWorkout(date)} style={{ background: "none", border: "none", color: T.coral, fontSize: 12.5, marginTop: 8 }}>
-              ✕ Rimuovi programma
-            </button>
-          )}
-        </div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 12.5, color: T.mut, marginBottom: 10 }}>
+            Imposta l'allenamento che farai oggi: vedrai quante kcal consumerà e quante potrai assumere.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button full onClick={start}>🏋️ Pianifica allenamento</Button>
+            <Button variant="ghost" onClick={() => setRest(date, true)} style={{ flexShrink: 0 }}>😴 Riposo</Button>
+          </div>
+        </>
       )}
     </Card>
+  );
+}
+
+function PlanRow({ emoji, title, sub, cta, onClick }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid var(--line)" }}>
+      <span style={{ fontSize: 22 }}>{emoji}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14.5 }}>{title}</div>
+        <div style={{ fontSize: 12, color: T.mut }}>{sub}</div>
+      </div>
+      <button onClick={onClick} style={{ ...linkBtn, color: T.blue }}>{cta}</button>
+    </div>
+  );
+}
+
+const linkBtn = { background: "none", border: "none", color: T.mut, fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" };
+
+function BalanceRow({ label, value, color, hint }) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 5 }}>
+      <span style={{ fontSize: 12.5, color: T.mut }}>
+        {label}
+        {hint && <span style={{ fontSize: 10.5, color: T.mut2, marginLeft: 6 }}>({hint})</span>}
+      </span>
+      <span className="font-display" style={{ fontSize: 15, fontWeight: 700, color: color || T.text }}>{value}</span>
+    </div>
   );
 }
 
