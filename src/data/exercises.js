@@ -73,3 +73,85 @@ export function allExercises() {
 export function exerciseById(id) {
   return allExercises().find((e) => e.id === id) || null;
 }
+
+// pool the coach is allowed to prescribe from, honoring user prefs
+// (es. "voglio fare solo push-up e squat"). Falls back to all.
+export function coachExercisePool() {
+  const { prefs } = getState();
+  const all = allExercises();
+  if (!prefs || !prefs.restrict || !prefs.allowedExerciseIds?.length) return all;
+  const set = new Set(prefs.allowedExerciseIds);
+  const pool = all.filter((e) => set.has(e.id));
+  return pool.length ? pool : all;
+}
+
+// muscle groups that the allowed pool can NOT train (coverage gaps).
+// Considers the full points matrix, not just the primary muscle.
+export function uncoveredMuscles() {
+  const { prefs } = getState();
+  if (!prefs || !prefs.restrict || !prefs.allowedExerciseIds?.length) return [];
+  const covered = new Set();
+  for (const e of coachExercisePool())
+    for (const m of Object.keys(exercisePoints(e))) covered.add(m);
+  return ["petto", "schiena", "spalle", "braccia", "gambe", "core"].filter(
+    (m) => !covered.has(m)
+  );
+}
+
+// ---- Points matrix: how much each exercise develops each muscle group ----
+// Weights are "punti per ~10 ripetizioni standard" (vedi docs/PROGRESSION_SYSTEM.md).
+// Primario ~10, sinergisti 2-6. Fallback = primario 10 se non in mappa.
+export const EXERCISE_POINTS = {
+  // PETTO
+  ex_panca_piana: { petto: 10, braccia: 5, spalle: 4 },
+  ex_panca_inclinata_manubri: { petto: 9, spalle: 5, braccia: 4 },
+  ex_piegamenti: { petto: 10, braccia: 5, spalle: 3, core: 2 },
+  ex_piegamenti_ginocchio: { petto: 8, braccia: 4, spalle: 3, core: 1 },
+  ex_dip_panca: { petto: 7, braccia: 8, spalle: 2 },
+  ex_croci_cavi: { petto: 10, spalle: 2 },
+  // SCHIENA
+  ex_trazioni: { schiena: 10, braccia: 6, spalle: 3, core: 2, petto: 1 },
+  ex_rematore_bilanciere: { schiena: 10, braccia: 4, spalle: 2 },
+  ex_rematore_inverso_tavolo: { schiena: 8, braccia: 5, spalle: 2, core: 2 },
+  ex_stacco: { schiena: 8, gambe: 7, core: 4 },
+  ex_lat_machine: { schiena: 9, braccia: 5, spalle: 2 },
+  ex_pulldown_cavi: { schiena: 9, braccia: 4 },
+  // SPALLE
+  ex_military_press: { spalle: 10, braccia: 5, core: 3, petto: 2 },
+  ex_shoulder_press_manubri: { spalle: 10, braccia: 4, core: 2 },
+  ex_alzate_laterali: { spalle: 10 },
+  ex_alzate_frontali: { spalle: 9, petto: 2 },
+  ex_pike_pushup: { spalle: 9, braccia: 5, petto: 2, core: 2 },
+  // BRACCIA
+  ex_curl_bilanciere: { braccia: 10 },
+  ex_curl_manubri: { braccia: 10 },
+  ex_curl_martello: { braccia: 10 },
+  ex_french_press: { braccia: 10 },
+  ex_pushdown_cavi: { braccia: 10 },
+  ex_dip_parallele: { braccia: 9, petto: 5, spalle: 2 },
+  // GAMBE
+  ex_squat: { gambe: 10, core: 3, schiena: 1 },
+  ex_squat_corpo_libero: { gambe: 9, core: 2 },
+  ex_affondi: { gambe: 9, core: 2 },
+  ex_leg_press: { gambe: 10 },
+  ex_leg_curl: { gambe: 9 },
+  ex_leg_extension: { gambe: 9 },
+  ex_polpacci: { gambe: 7 },
+  ex_stacco_rumeno: { gambe: 8, schiena: 5, core: 2 },
+  // CORE
+  ex_plank: { core: 10, spalle: 2 },
+  ex_crunch: { core: 10 },
+  ex_crunch_bici: { core: 10 },
+  ex_addominali: { core: 10 },
+  ex_ab_rollout_trx: { core: 10, braccia: 3, spalle: 2 },
+  ex_russian_twist: { core: 10 },
+  ex_mountain_climber: { core: 8, spalle: 3, gambe: 3 },
+  // CARDIO
+  ex_corsa: { gambe: 6, core: 1 },
+  ex_cyclette: { gambe: 6 },
+};
+
+export function exercisePoints(ex) {
+  if (!ex) return {};
+  return EXERCISE_POINTS[ex.id] || (ex.muscle ? { [ex.muscle]: 10 } : {});
+}

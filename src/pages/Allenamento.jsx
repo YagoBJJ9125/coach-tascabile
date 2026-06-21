@@ -5,14 +5,14 @@ import Header from "../components/Header.jsx";
 import { Card, Button, Segmented, EmptyState, Sheet, Input } from "../components/ui.jsx";
 import { T } from "../theme.js";
 import { useStore } from "../lib/store.js";
-import { createSession, deleteRoutine, createRoutine } from "../lib/sessions.js";
-import { allExercises, exerciseById } from "../data/exercises.js";
+import { createSession, deleteRoutine, createRoutine, generatePlan, clearPlan } from "../lib/sessions.js";
+import { coachExercisePool, exerciseById } from "../data/exercises.js";
 import { MUSCLE_GROUPS } from "../data/muscles.js";
 
 function generateWorkout(goal) {
-  // one exercise per muscle group, prefer compound/equipment by goal
+  // one exercise per muscle group, from the allowed pool (user prefs)
   const byMuscle = {};
-  for (const e of allExercises()) (byMuscle[e.muscle] ||= []).push(e);
+  for (const e of coachExercisePool()) (byMuscle[e.muscle] ||= []).push(e);
   const pick = [];
   for (const m of MUSCLE_GROUPS) {
     const pool = byMuscle[m.key] || [];
@@ -112,7 +112,14 @@ export default function Allenamento() {
           )}
         </>
       ) : (
-        <PlanView plan={plan} onStart={startGenerated} />
+        <PlanView
+          plan={plan}
+          onGenerate={generatePlan}
+          onClear={clearPlan}
+          onStartDay={(ids, title) =>
+            nav(`/session/${createSession({ exerciseIds: ids, title })}`)
+          }
+        />
       )}
 
       <Sheet open={newRoutine} onClose={() => setNewRoutine(false)} title="Nuova routine">
@@ -215,17 +222,17 @@ function RoutineCard({ routine, onStart, onDelete }) {
   );
 }
 
-function PlanView({ plan, onStart }) {
+function PlanView({ plan, onGenerate, onClear, onStartDay }) {
   if (!plan.length) {
     return (
       <>
         <EmptyState
           icon="🗺️"
           title="Nessun piano ancora"
-          sub="Genera un allenamento per iniziare il tuo percorso."
+          sub="Genera un piano settimanale su misura per iniziare il tuo percorso."
         />
-        <Button full onClick={onStart} style={{ marginTop: 8 }}>
-          🔄 Genera allenamento
+        <Button full onClick={onGenerate} style={{ marginTop: 8 }}>
+          🔄 Genera piano settimanale
         </Button>
       </>
     );
@@ -236,9 +243,29 @@ function PlanView({ plan, onStart }) {
         <Card key={p.id} style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 12, color: T.mut }}>Allenamento {i + 1}</div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>{p.title}</div>
-          <div style={{ fontSize: 12, color: T.mut }}>{p.durationMin} minuti</div>
+          <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+            {p.durationMin} min · {p.exerciseIds.length} esercizi
+          </div>
+          {p.exerciseIds.slice(0, 4).map((eid) => {
+            const def = exerciseById(eid);
+            return (
+              <div key={eid} style={{ fontSize: 12.5, color: T.mut, display: "flex", gap: 8, marginTop: 4 }}>
+                <span>{def?.emoji || "•"}</span>
+                <span>{def?.name || eid}</span>
+              </div>
+            );
+          })}
+          <Button full onClick={() => onStartDay(p.exerciseIds, p.title)} style={{ marginTop: 12 }}>
+            Avvia ▶
+          </Button>
         </Card>
       ))}
+      <Button full variant="ghost" onClick={onGenerate} style={{ marginTop: 4 }}>
+        🔄 Rigenera piano
+      </Button>
+      <Button full variant="ghost" onClick={onClear} style={{ marginTop: 8, color: T.coral }}>
+        Cancella piano
+      </Button>
     </div>
   );
 }

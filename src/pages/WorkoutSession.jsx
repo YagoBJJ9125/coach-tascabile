@@ -16,6 +16,7 @@ import { uid, fmtClock } from "../lib/format.js";
 import { T } from "../theme.js";
 import { Button, Sheet, Input } from "../components/ui.jsx";
 import ExercisePicker from "../components/ExercisePicker.jsx";
+import { speak, srSupported, createRecognizer, isWake, classifyCommand, parseSeconds } from "../lib/voice.js";
 
 export default function WorkoutSession() {
   const { id } = useParams();
@@ -25,10 +26,19 @@ export default function WorkoutSession() {
 
   const [elapsed, setElapsed] = useState(0);
   const [picker, setPicker] = useState(false);
-  const [rest, setRest] = useState(null); // {left,total}
+  const [rest, setRest] = useState(null); // {left,total,paused}
   const [summary, setSummary] = useState(null);
   const [saveRoutine, setSaveRoutine] = useState(false);
   const [rname, setRname] = useState("");
+
+  // voice coach
+  const [voiceOn, setVoiceOn] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("");
+  const recRef = useRef(null);
+  const voiceModeRef = useRef("off"); // off | idle | await_cmd | await_rest
+  const onRestEndRef = useRef(null);
+  const sessionRef = useRef(session);
+  useEffect(() => { sessionRef.current = session; });
 
   // running clock
   useEffect(() => {
@@ -40,14 +50,15 @@ export default function WorkoutSession() {
     return () => clearInterval(t);
   }, [session?.startedAt, session?.finished]);
 
-  // rest countdown
+  // rest countdown (skip while paused)
   useEffect(() => {
-    if (!rest) return;
+    if (!rest || rest.paused) return;
     if (rest.left <= 0) {
+      onRestEndRef.current && onRestEndRef.current();
       setRest(null);
       return;
     }
-    const t = setTimeout(() => setRest((r) => r && { ...r, left: r.left - 1 }), 1000);
+    const t = setTimeout(() => setRest((r) => (r && !r.paused ? { ...r, left: r.left - 1 } : r)), 1000);
     return () => clearTimeout(t);
   }, [rest]);
 
@@ -60,10 +71,13 @@ export default function WorkoutSession() {
     );
   }
 
-  const startRest = () => {
-    if (settings.restTimerAuto)
-      setRest({ left: settings.restDefaultSec, total: settings.restDefaultSec });
+  // start a rest countdown; sec optional (default from settings)
+  const startRest = (sec) => {
+    const total = Math.max(1, Math.round(sec || settings.restDefaultSec));
+    onRestEndRef.current = null; // default: nessun annuncio (impostato dalla voce)
+    setRest({ left: total, total, paused: false });
   };
+  const togglePauseRest = () => setRest((r) => (r ? { ...r, paused: !r.paused } : r));
 
   const setNote = (note) => updateSession(id, (s) => (s.note = note));
 
@@ -82,7 +96,7 @@ export default function WorkoutSession() {
       st.done = !st.done;
       nowDone = st.done;
     });
-    if (nowDone) startRest();
+    if (nowDone && settings.restTimerAuto) startRest();
   };
 
   const addSet = (exId) =>
@@ -97,6 +111,24 @@ export default function WorkoutSession() {
         distance: "",
         done: false,
         prev: last ? { kg: last.kg, reps: last.reps } : null,
+      });
+    });
+
+  // duplicate a set: copy values into a new set right after it
+  const duplicateSet = (exId, setId) =>
+    updateSession(id, (s) => {
+      const ex = s.exercises.find((e) => e.id === exId);
+      const idx = ex.sets.findIndex((x) => x.id === setId);
+      if (idx < 0) return;
+      const src = ex.sets[idx];
+      ex.sets.splice(idx + 1, 0, {
+        id: uid(),
+        kg: src.kg,
+        reps: src.reps,
+        timeSec: src.timeSec,
+        distance: src.distance,
+        done: false,
+        prev: src.prev || null,
       });
     });
 
@@ -117,7 +149,103 @@ export default function WorkoutSession() {
       for (const eid of ids) s.exercises.push(makeSessionExercise(eid));
     });
 
+  // mark the next not-done set as done; return {name, reps} for the announcement
+  const markNextSetDone = () => {
+    let info = null;
+    updateSession(id, (s) => {
+      for (const ex of s.exercises) {
+        const set = ex.sets.find((x) => !x.done);
+        if (set) {
+          set.done = true;
+          const def = exerciseById(ex.exerciseId);
+          info = { name: def?.name || "esercizio", reps: set.reps || set.timeSec || "" };
+          break;
+        }
+      }
+    });
+    return info;
+  };
+
+  // ---- voice coach state machine ----
+  const speakingRef = useRef(false);
+  const say = (text, cb) => {
+    speakingRef.current = true;
+    setVoiceStatus("🔊 " + text);
+    speak(text, () => setTimeout(() => { speakingRef.current = false; cb && cb(); }, 350));
+  };
+
+  const handleVoice = (txt) => {
+    if (speakingRef.current) return; // ignora la propria voce (TTS)
+    const mode = voiceModeRef.current;
+    if (mode === "idle") {
+      if (isWake(txt)) {
+        voiceModeRef.current = "await_cmd";
+        say("Sì, dimmi.");
+        setVoiceStatus('🎙️ In ascolto… ("fine serie")');
+      }
+      return;
+    }
+    if (mode === "await_cmd") {
+      const cmd = classifyCommand(txt);
+      if (cmd === "set_done") {
+        const info = markNextSetDone();
+        if (!info) { voiceModeRef.current = "idle"; say("Hai completato tutte le serie. Di' finisci allenamento per chiudere."); return; }
+        voiceModeRef.current = "await_rest";
+        say(`Serie ${info.reps ? "di " + info.reps + " ripetizioni " : ""}${info.name} effettuata. Quanti secondi di riposo?`);
+      } else if (cmd === "next_ex") { voiceModeRef.current = "idle"; say("Ok. Di' coach quando finisci la prossima serie."); }
+      else if (cmd === "finish") { say("Finisco l'allenamento."); stopVoice(); doFinish(); }
+      else if (cmd === "skip_rest") { setRest(null); voiceModeRef.current = "idle"; say("Riposo saltato."); }
+      else if (cmd === "stop") { voiceModeRef.current = "idle"; say("Ok, mi fermo. Di' coach per riattivarmi."); }
+      else { say('Non ho capito. Di\' "fine serie" oppure "prossimo esercizio".'); }
+      return;
+    }
+    if (mode === "await_rest") {
+      const sec = parseSeconds(txt);
+      if (sec) {
+        startRest(sec);
+        onRestEndRef.current = () => say("Pausa finita, pronto. Di' coach per la prossima serie.");
+        voiceModeRef.current = "idle";
+        say(`Riposo ${sec} secondi.`);
+      } else {
+        say("Non ho capito i secondi. Dimmi un numero, per esempio sessanta.");
+      }
+      return;
+    }
+  };
+
+  const startVoice = () => {
+    if (!srSupported()) {
+      alert("Riconoscimento vocale non supportato. Usa Chrome (anche su Android) e consenti il microfono.");
+      return;
+    }
+    const r = createRecognizer({
+      onresult: (txt, final) => { if (final) handleVoice(txt); },
+      onend: () => { if (voiceModeRef.current !== "off") { try { r.start(); } catch {} } },
+      onerror: () => {},
+    });
+    if (!r) return;
+    recRef.current = r;
+    voiceModeRef.current = "idle";
+    setVoiceOn(true);
+    try { r.start(); } catch {}
+    say('Modalità voce attiva. Di\' "coach" quando finisci una serie.');
+    setVoiceStatus('🎙️ Di\' "coach"…');
+  };
+
+  const stopVoice = () => {
+    voiceModeRef.current = "off";
+    setVoiceOn(false);
+    setVoiceStatus("");
+    try { recRef.current && recRef.current.stop(); } catch {}
+    recRef.current = null;
+    try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch {}
+  };
+
+  // stop voice when leaving the session
+  useEffect(() => () => stopVoice(), []);
+
   const doFinish = () => {
+    stopVoice();
     const res = finishSession(id);
     setSummary(res || { burn: 0, muscles: {} });
   };
@@ -157,16 +285,45 @@ export default function WorkoutSession() {
         >
           ✕
         </button>
-        <div className="font-display" style={{ fontSize: 22, fontWeight: 700 }}>
-          {fmtClock(elapsed)}
+        <div style={{ textAlign: "center" }}>
+          <div className="font-display" style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
+            {fmtClock(elapsed)}
+          </div>
+          <div style={{ fontSize: 9, color: T.mut }}>tempo totale</div>
         </div>
-        <button
-          onClick={doFinish}
-          style={{ background: "none", border: "none", color: T.blue, fontSize: 22 }}
-        >
-          ✓
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            onClick={() => (voiceOn ? stopVoice() : startVoice())}
+            title="Coach a voce"
+            style={{
+              background: voiceOn ? T.coral : "none", border: "none",
+              color: voiceOn ? "#2a0b08" : T.mut, fontSize: 18, borderRadius: 999,
+              width: 34, height: 34,
+            }}
+          >
+            🎙️
+          </button>
+          <button
+            onClick={doFinish}
+            style={{ background: "none", border: "none", color: T.blue, fontSize: 22 }}
+          >
+            ✓
+          </button>
+        </div>
       </div>
+
+      {/* voice status banner */}
+      {voiceOn && (
+        <div
+          style={{
+            position: "sticky", top: "calc(52px + var(--sat))", zIndex: 19,
+            background: "rgba(255,107,94,.12)", borderBottom: "1px solid rgba(255,107,94,.3)",
+            color: T.text, fontSize: 12.5, padding: "8px 14px", textAlign: "center",
+          }}
+        >
+          {voiceStatus || "🎙️ Coach in ascolto"}
+        </div>
+      )}
 
       <div style={{ padding: "14px 14px 0" }}>
         <input
@@ -213,6 +370,7 @@ export default function WorkoutSession() {
             onUpdateSet={updateSet}
             onToggleDone={toggleDone}
             onAddSet={addSet}
+            onDuplicateSet={duplicateSet}
             onRemoveSet={removeSet}
             onRemove={removeExercise}
           />
@@ -221,6 +379,18 @@ export default function WorkoutSession() {
         <Button full variant="ghost" onClick={() => setPicker(true)} style={{ marginTop: 4 }}>
           ＋ Aggiungi esercizio
         </Button>
+
+        {/* manual rest control */}
+        {session.exercises.length > 0 && !rest && (
+          <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: T.mut, marginRight: 2 }}>⏱ Riposo:</span>
+            {[30, 60, 90, 120].map((s) => (
+              <button key={s} onClick={() => startRest(s)} style={pill}>
+                {s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60 ? (s % 60) + "s" : ""}`}
+              </button>
+            ))}
+          </div>
+        )}
 
         {session.exercises.length > 0 && (
           <Button
@@ -259,16 +429,18 @@ export default function WorkoutSession() {
             }}
           >
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 12, color: T.mut }}>Timer di Riposo</div>
-              <div className="font-display" style={{ fontSize: 22, fontWeight: 700 }}>
+              <div style={{ fontSize: 12, color: T.mut }}>
+                Timer di Riposo {rest.paused ? "(in pausa)" : ""}
+              </div>
+              <div className="font-display" style={{ fontSize: 22, fontWeight: 700, color: rest.paused ? T.amber : T.text }}>
                 {fmtClock(rest.left)}
               </div>
             </div>
-            <button
-              onClick={() => setRest((r) => ({ ...r, left: r.left + 15 }))}
-              style={pill}
-            >
+            <button onClick={() => setRest((r) => ({ ...r, left: r.left + 15 }))} style={pill}>
               +15s
+            </button>
+            <button onClick={togglePauseRest} style={pill}>
+              {rest.paused ? "▶" : "⏸"}
             </button>
             <button onClick={() => setRest(null)} style={pill}>
               Salta
@@ -289,24 +461,39 @@ export default function WorkoutSession() {
               <Stat label="Kcal" value={`~${summary.burn}`} color={T.green} />
             </div>
             <div style={{ fontSize: 12, color: T.mut, marginBottom: 6 }}>
-              MUSCOLI ALLENATI
+              PROGRESSO MUSCOLI (+punti)
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-              {Object.keys(summary.muscles || {}).length ? (
-                Object.entries(summary.muscles).map(([m, n]) => (
-                  <span
-                    key={m}
-                    style={{
-                      background: "var(--surface2)",
-                      border: "1px solid var(--line)",
-                      borderRadius: 999,
-                      padding: "6px 12px",
-                      fontSize: 13,
-                    }}
-                  >
-                    {muscleLabel(m)} · {n} serie
-                  </span>
-                ))
+            <div style={{ marginBottom: 16 }}>
+              {Object.keys(summary.musclePoints || {}).length ? (
+                Object.entries(summary.musclePoints)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([m, pts]) => {
+                    const d = (summary.levelDeltas || {})[m];
+                    return (
+                      <div
+                        key={m}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "7px 0",
+                          borderTop: "1px solid var(--line)",
+                        }}
+                      >
+                        <span style={{ flex: 1, fontSize: 14, fontWeight: 600 }}>
+                          {muscleLabel(m)}
+                        </span>
+                        {d?.promoted && (
+                          <span style={{ fontSize: 11, color: T.green, fontWeight: 700 }}>
+                            ↑ {d.after}
+                          </span>
+                        )}
+                        <span className="font-display" style={{ fontWeight: 700, color: T.blue }}>
+                          +{pts}
+                        </span>
+                      </div>
+                    );
+                  })
               ) : (
                 <span style={{ color: T.mut, fontSize: 13 }}>
                   Nessuna serie completata.
@@ -377,7 +564,7 @@ function Stat({ label, value, color }) {
   );
 }
 
-function ExerciseCard({ ex, onUpdateSet, onToggleDone, onAddSet, onRemoveSet, onRemove }) {
+function ExerciseCard({ ex, onUpdateSet, onToggleDone, onAddSet, onDuplicateSet, onRemoveSet, onRemove }) {
   const def = exerciseById(ex.exerciseId);
   const tracks = def?.tracks || "weight_reps";
   const [menu, setMenu] = useState(false);
@@ -394,8 +581,8 @@ function ExerciseCard({ ex, onUpdateSet, onToggleDone, onAddSet, onRemoveSet, on
 
   const grid =
     tracks === "weight_reps"
-      ? "32px 1fr 1fr 1fr 40px"
-      : "32px 1fr 1fr 40px";
+      ? "28px 1fr 1fr 1fr 64px"
+      : "28px 1fr 1fr 64px";
 
   return (
     <div
@@ -460,6 +647,7 @@ function ExerciseCard({ ex, onUpdateSet, onToggleDone, onAddSet, onRemoveSet, on
           grid={grid}
           onChange={(patch) => onUpdateSet(ex.id, s.id, patch)}
           onToggle={() => onToggleDone(ex.id, s.id)}
+          onDuplicate={() => onDuplicateSet(ex.id, s.id)}
           onRemove={() => onRemoveSet(ex.id, s.id)}
         />
       ))}
@@ -484,7 +672,7 @@ function ExerciseCard({ ex, onUpdateSet, onToggleDone, onAddSet, onRemoveSet, on
   );
 }
 
-function SetRow({ n, set, tracks, grid, onChange, onToggle, onRemove }) {
+function SetRow({ n, set, tracks, grid, onChange, onToggle, onDuplicate, onRemove }) {
   const prevTxt = set.prev
     ? tracks === "weight_reps"
       ? `${set.prev.kg || 0}×${set.prev.reps || 0}`
@@ -541,21 +729,28 @@ function SetRow({ n, set, tracks, grid, onChange, onToggle, onRemove }) {
           {numInput("timeSec", "sec")}
         </>
       )}
-      <button
-        onClick={onToggle}
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: "50%",
-          border: "none",
-          background: set.done ? T.green : "var(--surface3)",
-          color: set.done ? "#06210f" : T.mut,
-          fontSize: 16,
-          fontWeight: 800,
-        }}
-      >
-        ✓
-      </button>
+      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+        <button
+          onClick={onDuplicate}
+          title="Duplica serie"
+          style={{
+            width: 26, height: 36, borderRadius: 8, border: "1px solid var(--line)",
+            background: "var(--surface2)", color: T.mut, fontSize: 14,
+          }}
+        >
+          ⧉
+        </button>
+        <button
+          onClick={onToggle}
+          style={{
+            width: 36, height: 36, borderRadius: "50%", border: "none",
+            background: set.done ? T.green : "var(--surface3)",
+            color: set.done ? "#06210f" : T.mut, fontSize: 16, fontWeight: 800,
+          }}
+        >
+          ✓
+        </button>
+      </div>
     </div>
   );
 }

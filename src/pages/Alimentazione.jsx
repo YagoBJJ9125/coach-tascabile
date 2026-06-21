@@ -4,10 +4,15 @@ import Header from "../components/Header.jsx";
 import { Card, Button, Sheet, Input } from "../components/ui.jsx";
 import { T } from "../theme.js";
 import { useStore } from "../lib/store.js";
-import { nutritionPlan, sumDayFood, sumDayMicros } from "../lib/nutrition.js";
+import { sumDayFood, sumDayMicros } from "../lib/nutrition.js";
+import { energyPlan } from "../lib/coach.js";
+import { weightTrend } from "../lib/progress.js";
+import { fridgeCoverage, shoppingGap, fillProteinGap } from "../lib/ledger.js";
+import { addFridgeItem, removeFridgeItem } from "../lib/fridge.js";
 import { todayKey, addDays, fmtDateLong, isToday, norm } from "../lib/format.js";
 import { allFoods, foodById, MEAL_TYPES, MICRO_KEYS } from "../data/foods.js";
 import { buildEntry, logFood, removeFood } from "../lib/food.js";
+import { searchOFF, getByBarcode } from "../lib/openfoodfacts.js";
 
 export default function Alimentazione() {
   const profile = useStore((s) => s.profile);
@@ -15,15 +20,25 @@ export default function Alimentazione() {
   const sessions = useStore((s) => s.sessions);
   const recentFoods = useStore((s) => s.recentFoods);
 
+  const fridge = useStore((s) => s.fridge);
+  const fullState = useStore((s) => s);
   const [date, setDate] = useState(todayKey());
   const [page, setPage] = useState(0); // 0 macros, 1 vitamine, 2 minerali
   const [searchMeal, setSearchMeal] = useState(null); // meal key when searching
   const [detail, setDetail] = useState(null); // {food, meal}
+  const [fridgeOpen, setFridgeOpen] = useState(false);
 
   const burned = sessions
     .filter((s) => s.date === date && s.finished)
     .reduce((n, s) => n + (s.burn || 0), 0);
-  const plan = useMemo(() => nutritionPlan(profile, burned), [profile, burned]);
+  const trend = useMemo(() => weightTrend(), [fullState.weights]);
+  const trainedStrength = sessions.some(
+    (s) => s.finished && s.date === date && Object.keys(s.muscles || {}).length
+  );
+  const plan = useMemo(
+    () => energyPlan(profile, { trend, trainedStrength }),
+    [profile, trend, trainedStrength]
+  );
   const day = foodLog[date];
   const eaten = sumDayFood(day);
   const micros = useMemo(() => sumDayMicros(day, MICRO_KEYS), [day]);
@@ -44,6 +59,21 @@ export default function Alimentazione() {
         </div>
         <NavArrow dir="›" onClick={() => setDate((d) => addDays(d, 1))} disabled={isToday(date)} />
       </div>
+
+      {/* fridge quick access */}
+      <button
+        onClick={() => setFridgeOpen(true)}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 14, padding: "12px 14px", color: T.text, marginBottom: 12 }}
+      >
+        <span style={{ fontSize: 20 }}>🧊</span>
+        <span style={{ flex: 1, textAlign: "left", fontSize: 14, fontWeight: 600 }}>
+          Frigo / Dispensa
+        </span>
+        <span style={{ fontSize: 12.5, color: T.mut }}>
+          {fridge.length ? `${fridge.length} alimenti` : "vuoto"}
+        </span>
+        <span style={{ color: T.blue }}>›</span>
+      </button>
 
       {/* paged summary */}
       <Card style={{ marginBottom: 8 }}>
@@ -89,6 +119,108 @@ export default function Alimentazione() {
           setDetail(null);
         }}
       />
+
+      {/* fridge / dispensa */}
+      <FridgeSheet
+        open={fridgeOpen}
+        onClose={() => setFridgeOpen(false)}
+        fridge={fridge}
+        energy={plan}
+      />
+    </div>
+  );
+}
+
+function FridgeSheet({ open, onClose, fridge, energy }) {
+  const [q, setQ] = useState("");
+  const cov = fridgeCoverage(fridge, energy);
+  const gap = shoppingGap(fridge, energy, 1);
+  const suggestions = gap ? fillProteinGap(gap.gap.p, allFoods()) : [];
+
+  const results = useMemo(() => {
+    const nq = norm(q);
+    if (!nq) return [];
+    return allFoods().filter((f) => norm(f.name).includes(nq)).slice(0, 8);
+  }, [q, open]);
+
+  return (
+    <Sheet open={open} onClose={onClose} title="🧊 Frigo / Dispensa">
+      {/* coverage */}
+      {cov.hasItems && energy && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+          <FBox label="Calorie" value={`${cov.totals.kcal}`} sub={`${cov.kcalDays.toFixed(1)} gg`} />
+          <FBox label="Proteine" value={`${cov.totals.p} g`} sub={`${cov.proteinDays.toFixed(1)} gg`} color={cov.proteinDays < 1 ? T.coral : T.green} />
+          <FBox label="Carb/Gr" value={`${cov.totals.c}/${cov.totals.f}`} sub="g" />
+        </div>
+      )}
+
+      {/* add */}
+      <Input placeholder="🔎 Aggiungi alimento al frigo" value={q} onChange={(e) => setQ(e.target.value)} />
+      {results.map((f) => (
+        <button
+          key={f.id}
+          onClick={() => { addFridgeItem(f, f.portions[0].grams); setQ(""); }}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 8px", borderRadius: 10, border: "none", background: "transparent", textAlign: "left", borderBottom: "1px solid var(--line)" }}
+        >
+          <span style={{ fontSize: 20 }}>{f.emoji}</span>
+          <span style={{ flex: 1, fontSize: 14 }}>{f.name}</span>
+          <span style={{ fontSize: 12, color: T.mut }}>+{f.portions[0].grams}g</span>
+          <span style={{ color: T.blue, fontWeight: 700 }}>＋</span>
+        </button>
+      ))}
+
+      {/* inventory */}
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 11, color: T.mut, fontWeight: 800, marginBottom: 8 }}>
+          IN FRIGO ({fridge.length})
+        </div>
+        {fridge.length === 0 && (
+          <div style={{ fontSize: 12.5, color: T.mut, padding: "8px 0" }}>
+            Vuoto. Cerca un alimento sopra per aggiungerlo.
+          </div>
+        )}
+        {fridge.map((it) => (
+          <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid var(--line)" }}>
+            <span style={{ fontSize: 20 }}>{it.emoji}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{it.name}</div>
+              <div style={{ fontSize: 11, color: T.mut }}>{it.grams} g · {it.kcal} kcal · P{it.p}</div>
+            </div>
+            <button onClick={() => removeFridgeItem(it.id)} style={{ background: "none", border: "none", color: T.coral, fontSize: 16 }}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      {/* shopping gap */}
+      {gap && energy && (gap.gap.kcal > 0 || gap.gap.p > 0) && (
+        <div style={{ marginTop: 16, padding: 14, background: "var(--surface2)", borderRadius: 14, border: "1px solid var(--line)" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>🛒 Per coprire 1 giorno mancano</div>
+          <div style={{ fontSize: 12.5, color: T.mut, marginBottom: 8 }}>
+            {gap.gap.kcal} kcal · {gap.gap.p} g proteine · {gap.gap.c} g carbo · {gap.gap.f} g grassi
+          </div>
+          {suggestions.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, color: T.mut, marginBottom: 6 }}>Per le proteine mancanti, ad es.:</div>
+              {suggestions.map((s) => (
+                <div key={s.food.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "3px 0" }}>
+                  <span>{s.food.emoji} {s.food.name}</span>
+                  <span style={{ color: T.mut }}>~{s.grams} g ({s.kcal} kcal)</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+function FBox({ label, value, sub, color }) {
+  return (
+    <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 12, padding: "10px", textAlign: "center", border: "1px solid var(--line)" }}>
+      <div style={{ fontSize: 10.5, color: T.mut }}>{label}</div>
+      <div className="font-display" style={{ fontSize: 16, fontWeight: 700, color: color || T.text }}>{value}</div>
+      <div style={{ fontSize: 10, color: T.mut }}>{sub}</div>
     </div>
   );
 }
@@ -246,7 +378,11 @@ function MealSection({ meal, entries, onAdd, onRemove }) {
 
 function FoodSearch({ open, meal, recentFoods, onClose, onPick }) {
   const [q, setQ] = useState("");
-  const list = useMemo(() => {
+  const [off, setOff] = useState([]);
+  const [loadingOff, setLoadingOff] = useState(false);
+  const [barcode, setBarcode] = useState("");
+
+  const local = useMemo(() => {
     const nq = norm(q);
     const foods = allFoods();
     if (!nq) {
@@ -256,29 +392,89 @@ function FoodSearch({ open, meal, recentFoods, onClose, onPick }) {
     return foods.filter((f) => norm(f.name).includes(nq));
   }, [q, open, recentFoods]);
 
+  // debounced OpenFoodFacts online search
+  useEffect(() => {
+    const nq = q.trim();
+    if (nq.length < 3) { setOff([]); return; }
+    let alive = true;
+    setLoadingOff(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await searchOFF(nq);
+        if (alive) setOff(res);
+      } catch {
+        if (alive) setOff([]);
+      } finally {
+        if (alive) setLoadingOff(false);
+      }
+    }, 500);
+    return () => { alive = false; clearTimeout(t); };
+  }, [q]);
+
+  const lookupBarcode = async () => {
+    const code = barcode.trim();
+    if (!code) return;
+    setLoadingOff(true);
+    try {
+      const f = await getByBarcode(code);
+      if (f) onPick(f);
+      else alert("Prodotto non trovato per il codice " + code);
+    } catch {
+      alert("Errore nella ricerca del codice a barre.");
+    } finally {
+      setLoadingOff(false);
+    }
+  };
+
   const mealLabel = MEAL_TYPES.find((m) => m.key === meal)?.label || "";
+  const Row = (f, online) => (
+    <button
+      key={f.id}
+      onClick={() => onPick(f)}
+      style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderRadius: 12, border: "none", background: "transparent", textAlign: "left", borderBottom: "1px solid var(--line)" }}
+    >
+      <span style={{ fontSize: 22 }}>{f.emoji}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+        <div style={{ fontSize: 12, color: T.mut }}>
+          {f.per100.kcal} kcal · 100g {online && <span style={{ color: T.blue }}>· online</span>}
+        </div>
+      </div>
+      <span style={{ color: T.mut, fontSize: 18 }}>›</span>
+    </button>
+  );
 
   return (
     <Sheet open={open} onClose={onClose} title={`Aggiungi a ${mealLabel}`}>
-      <Input placeholder="🔎 Cerca alimento" value={q} onChange={(e) => setQ(e.target.value)} />
-      {!q && <div style={{ fontSize: 11, color: T.mut, margin: "0 0 8px 2px" }}>{recentFoods.length ? "RECENTI" : "SUGGERITI"}</div>}
-      <div style={{ maxHeight: "55vh", overflowY: "auto" }}>
-        {list.map((f) => (
-          <button
-            key={f.id}
-            onClick={() => onPick(f)}
-            style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderRadius: 12, border: "none", background: "transparent", textAlign: "left", borderBottom: "1px solid var(--line)" }}
-          >
-            <span style={{ fontSize: 22 }}>{f.emoji}</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 600 }}>{f.name}</div>
-              <div style={{ fontSize: 12, color: T.mut }}>
-                {f.per100.kcal} kcal · 100g
-              </div>
-            </div>
-            <span style={{ color: T.mut, fontSize: 18 }}>›</span>
-          </button>
-        ))}
+      <Input placeholder="🔎 Cerca alimento (anche online)" value={q} onChange={(e) => setQ(e.target.value)} />
+
+      {/* barcode */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <Input
+          inputMode="numeric"
+          placeholder="📷 Codice a barre"
+          value={barcode}
+          onChange={(e) => setBarcode(e.target.value)}
+          style={{ marginBottom: 0 }}
+        />
+        <Button onClick={lookupBarcode} disabled={!barcode.trim()} variant="ghost" style={{ flexShrink: 0 }}>
+          Cerca
+        </Button>
+      </div>
+
+      <div style={{ maxHeight: "52vh", overflowY: "auto" }}>
+        {!q && <div style={{ fontSize: 11, color: T.mut, margin: "0 0 8px 2px" }}>{recentFoods.length ? "RECENTI" : "SUGGERITI"}</div>}
+        {local.map((f) => Row(f, false))}
+
+        {q.trim().length >= 3 && (
+          <div style={{ fontSize: 11, color: T.mut, margin: "12px 0 8px 2px" }}>
+            DA OPENFOODFACTS {loadingOff && "· cerco…"}
+          </div>
+        )}
+        {off.map((f) => Row(f, true))}
+        {q.trim().length >= 3 && !loadingOff && off.length === 0 && (
+          <div style={{ fontSize: 12, color: T.mut, padding: 8 }}>Nessun risultato online.</div>
+        )}
       </div>
     </Sheet>
   );

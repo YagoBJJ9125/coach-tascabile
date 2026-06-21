@@ -254,6 +254,36 @@ export function Sheet({ open, onClose, title, children }) {
   );
 }
 
+// points: [{label, v}] — small responsive line chart
+export function MiniLine({ points, color = "#4da6ff", goal, height = 130 }) {
+  if (!points || points.length < 2) return null;
+  const W = 320, H = height, pad = 26;
+  const vs = points.map((p) => p.v);
+  let mn = Math.min(...vs), mx = Math.max(...vs);
+  if (goal != null) { mn = Math.min(mn, goal); mx = Math.max(mx, goal); }
+  if (mn === mx) { mn -= 1; mx += 1; }
+  const x = (i) => pad + (i * (W - 2 * pad)) / (points.length - 1);
+  const y = (v) => H - pad - ((v - mn) / (mx - mn)) * (H - 2 * pad);
+  const d = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
+  const idxs = [0, Math.floor((points.length - 1) / 2), points.length - 1];
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height }}>
+      {goal != null && goal >= mn && goal <= mx && (
+        <line x1={pad} x2={W - pad} y1={y(goal)} y2={y(goal)} stroke="#4ade80" strokeDasharray="4 4" strokeWidth="1" />
+      )}
+      <path d={d} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+      {points.map((p, i) => (
+        <circle key={i} cx={x(i)} cy={y(p.v)} r="3" fill={color} />
+      ))}
+      {idxs.map((i) => (
+        <text key={i} x={x(i)} y={H - 6} fill="#9aa0ab" fontSize="10" textAnchor="middle">
+          {points[i].label}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
 export function EmptyState({ icon = "📭", title, sub }) {
   return (
     <div style={{ textAlign: "center", padding: "32px 16px", color: T.mut }}>

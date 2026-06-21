@@ -1,123 +1,239 @@
-// Home dashboard: greeting, today snapshot, coach tip, recent activity.
+// Home = Coach dashboard. Surfaces the engine (coach.js) + accounting (ledger.js):
+// today's balance, reasoned recommendations, weekly projection, fridge coverage.
 import { useNavigate } from "react-router-dom";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Header from "../components/Header.jsx";
-import { Card, Button } from "../components/ui.jsx";
+import { Card, Button, ProgressBar } from "../components/ui.jsx";
 import { T } from "../theme.js";
 import { useStore } from "../lib/store.js";
-import { nutritionPlan, sumDayFood } from "../lib/nutrition.js";
 import { createSession } from "../lib/sessions.js";
-import { todayKey, fmtDateLong, fmtClock } from "../lib/format.js";
-import { sessionVolume } from "../lib/workout.js";
-import { muscleLabel } from "../data/muscles.js";
+import { todayKey, fmtDateLong } from "../lib/format.js";
+import { energyPlan, recommendations } from "../lib/coach.js";
+import { dayLedger, weekLedger, fridgeCoverage } from "../lib/ledger.js";
+import { weightTrend } from "../lib/progress.js";
+import { readiness } from "../lib/sleep.js";
 
 export default function Home() {
   const nav = useNavigate();
-  const profile = useStore((s) => s.profile);
-  const sessions = useStore((s) => s.sessions);
-  const foodLog = useStore((s) => s.foodLog);
-
+  const state = useStore((s) => s);
+  const { profile, sessions, fridge } = state;
   const today = todayKey();
-  const todaysSessions = sessions.filter((s) => s.date === today && s.finished);
-  const burnedToday = todaysSessions.reduce((n, s) => n + (s.burn || 0), 0);
-  const trainedStrength = todaysSessions.some((s) =>
-    Object.keys(s.muscles || {}).some((m) => m !== "gambe")
-  );
-  const plan = useMemo(
-    () => nutritionPlan(profile, burnedToday, trainedStrength),
-    [profile, burnedToday, trainedStrength]
-  );
-  const eaten = sumDayFood(foodLog[today]);
-  const remaining = plan ? plan.target - eaten.kcal + Math.round(burnedToday * 0.5) : 0;
 
-  const recent = sessions.filter((s) => s.finished).slice(0, 4);
-  const tip = coachTip(plan, todaysSessions.length, profile.goal);
+  const trend = useMemo(() => weightTrend(), [state.weights]);
+  const ready = useMemo(
+    () => readiness(state.sleep, sessions, Number(profile.sleepGoal) || 8),
+    [state.sleep, sessions, profile.sleepGoal]
+  );
+  const trainedStrength = sessions.some(
+    (s) => s.finished && s.date === today && Object.keys(s.muscles || {}).length
+  );
+
+  const energy = useMemo(
+    () => energyPlan(profile, { trend, trainedStrength }),
+    [profile, trend, trainedStrength]
+  );
+  const dl = useMemo(() => dayLedger(state, today, energy), [state, energy]);
+  const wl = useMemo(() => weekLedger(state, energy), [state, energy]);
+  const fc = useMemo(() => fridgeCoverage(fridge, energy), [fridge, energy]);
+  const recs = useMemo(
+    () => recommendations(state, { energy, dayLedger: dl, weekLedger: wl, trend, fridgeCoverage: fc, ready }),
+    [state, energy, dl, wl, trend, fc, ready]
+  );
 
   return (
     <div className="page">
-      <Header right={
-        <button onClick={() => nav(`/session/${createSession({})}`)}
-          style={{ background: T.blue, border: "none", color: "#06121f", width: 34, height: 34, borderRadius: "50%", fontSize: 22, fontWeight: 700 }}>
-          ＋
-        </button>
-      }/>
+      <Header
+        right={
+          <button
+            onClick={() => nav(`/session/${createSession({})}`)}
+            style={{ background: T.blue, border: "none", color: "#06121f", width: 34, height: 34, borderRadius: "50%", fontSize: 22, fontWeight: 700 }}
+          >
+            ＋
+          </button>
+        }
+      />
 
       <div style={{ fontSize: 12, color: T.mut, textTransform: "capitalize", marginTop: 6 }}>
         {fmtDateLong(today)}
       </div>
-      <h1 className="font-display" style={{ fontSize: 26, fontWeight: 700, margin: "2px 0 16px" }}>
+      <h1 className="font-display" style={{ fontSize: 25, fontWeight: 700, margin: "2px 0 16px" }}>
         Ciao {profile.name || "atleta"} 👋
       </h1>
 
-      {/* today snapshot */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-        <Mini label="ALLENAMENTI" value={todaysSessions.length} color={T.blue} />
-        <Mini label="KCAL RESID." value={plan ? remaining : "—"} color={T.green} />
-        <Mini label="BRUCIATE" value={burnedToday ? `~${burnedToday}` : "0"} color={T.amber} />
-      </div>
+      {/* ---- coach AI ---- */}
+      <button
+        onClick={() => nav("/coach")}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 12, marginBottom: 14,
+          background: "linear-gradient(100deg,#1c2740,#231a3a)", border: "1px solid var(--line)",
+          borderRadius: 16, padding: "14px", color: T.text, textAlign: "left",
+        }}
+      >
+        <span style={{ fontSize: 26 }}>🧠</span>
+        <span style={{ flex: 1 }}>
+          <span style={{ display: "block", fontWeight: 700, fontSize: 15 }}>Parla col tuo coach</span>
+          <span style={{ fontSize: 12, color: T.mut }}>Consigli su misura dai tuoi numeri</span>
+        </span>
+        <span style={{ color: T.blue, fontSize: 20 }}>›</span>
+      </button>
 
-      <Card style={{ borderLeft: `3px solid ${T.blue}`, marginBottom: 14 }}>
-        <div style={{ fontSize: 11, color: T.blue, fontWeight: 800, marginBottom: 6 }}>
-          IL COACH DICE
+      {/* ---- bilancio di oggi ---- */}
+      {energy && (
+        <Card style={{ marginBottom: 14 }}>
+          <SectionLabel>BILANCIO DI OGGI</SectionLabel>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
+            <span className="font-display" style={{ fontSize: 34, fontWeight: 700, color: dl.remaining < 0 ? T.coral : T.blue }}>
+              {dl.remaining}
+            </span>
+            <span style={{ color: T.mut, fontSize: 13 }}>kcal rimanenti</span>
+          </div>
+          <div style={{ fontSize: 12, color: T.mut, marginBottom: 12 }}>
+            {dl.budget} budget − {dl.eaten.kcal} cibo + {dl.exercise.credit} esercizio
+          </div>
+          <MacroBudget label="Proteine" m={dl.macros.p} color={T.blue} />
+          <MacroBudget label="Carboidrati" m={dl.macros.c} color={T.amber} />
+          <MacroBudget label="Grassi" m={dl.macros.f} color={T.purple} />
+          {energy.adapt !== 0 && (
+            <div style={{ fontSize: 11.5, color: T.amber, marginTop: 10 }}>
+              ⚖️ Target adattato: {energy.adapt > 0 ? "+" : ""}{energy.adapt} kcal sul mantenimento ({energy.maintenance}).
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ---- prontezza all'allenamento ---- */}
+      {ready && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <SectionLabel>PRONTEZZA ALL'ALLENAMENTO</SectionLabel>
+            <span style={{ fontSize: 12.5, fontWeight: 800, color: ready.color }}>{ready.level}</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span className="font-display" style={{ fontSize: 30, fontWeight: 700, color: ready.color }}>
+              {ready.score}
+            </span>
+            <span style={{ fontSize: 12, color: T.mut }}>/ 100</span>
+          </div>
+          <div style={{ margin: "8px 0" }}>
+            <ProgressBar value={ready.score / 100} color={ready.color} />
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.5 }}>{ready.advice}</div>
+        </Card>
+      )}
+
+      {/* ---- il coach consiglia ---- */}
+      {recs.length > 0 && (
+        <>
+          <SectionTitle>Il coach consiglia</SectionTitle>
+          {recs.map((r) => (
+            <RecCard key={r.id} rec={r} />
+          ))}
+        </>
+      )}
+
+      {/* ---- bilancio settimanale ---- */}
+      {wl && wl.days >= 1 && energy && (
+        <Card style={{ marginBottom: 14 }}>
+          <SectionLabel>BILANCIO SETTIMANALE ({wl.days} gg)</SectionLabel>
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <Mini label="Intake medio" value={`${wl.avgIntake}`} unit="kcal" />
+            <Mini
+              label="Bilancio/gg"
+              value={`${wl.dailyBalance > 0 ? "+" : ""}${wl.dailyBalance}`}
+              unit="kcal"
+              color={wl.dailyBalance < 0 ? T.green : T.amber}
+            />
+            <Mini
+              label="Proiezione"
+              value={`${wl.projectedKgPerWeek > 0 ? "+" : ""}${wl.projectedKgPerWeek}`}
+              unit="kg/sett"
+            />
+          </div>
+          <div style={{ fontSize: 11.5, color: T.mut, marginTop: 10 }}>
+            Obiettivo: {energy.rateKgWk > 0 ? "+" : ""}{energy.rateKgWk.toFixed(2)} kg/sett · mantenimento {energy.maintenance} kcal.
+          </div>
+        </Card>
+      )}
+
+      {/* ---- frigo ---- */}
+      <Card style={{ marginBottom: 14 }} onClick={() => nav("/alimentazione")}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <SectionLabel>FRIGO / DISPENSA</SectionLabel>
+          <span style={{ color: T.blue, fontSize: 13 }}>Gestisci ›</span>
         </div>
-        <div style={{ fontSize: 14, lineHeight: 1.55 }}>{tip}</div>
+        {fc.hasItems ? (
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <Mini label="Disponibili" value={`${fc.totals.kcal}`} unit="kcal" />
+            <Mini label="Copertura" value={fc.kcalDays.toFixed(1)} unit="giorni" />
+            <Mini label="Proteine" value={`${fc.totals.p}`} unit="g" color={fc.proteinDays < 1 ? T.coral : T.green} />
+          </div>
+        ) : (
+          <div style={{ fontSize: 12.5, color: T.mut, marginTop: 6 }}>
+            Aggiungi cosa hai in frigo per calcolare copertura e lista della spesa.
+          </div>
+        )}
       </Card>
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
         <Button full onClick={() => nav("/allenamento")}>🏋️ Allenati</Button>
         <Button full variant="ghost" onClick={() => nav("/alimentazione")}>🍎 Cibo</Button>
       </div>
-
-      <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>
-        Attività recente
-      </h2>
-      {recent.length === 0 ? (
-        <Card style={{ textAlign: "center", color: T.mut, fontSize: 13 }}>
-          Nessun allenamento ancora. Inizia il primo! 💪
-        </Card>
-      ) : (
-        recent.map((s) => {
-          const v = sessionVolume(s);
-          return (
-            <Card key={s.id} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <div style={{ fontWeight: 700 }}>{s.title}</div>
-                <div style={{ fontSize: 12, color: T.mut }}>{fmtClock(s.durationSec)}</div>
-              </div>
-              <div style={{ fontSize: 12, color: T.mut, marginTop: 4 }}>
-                {v.sets} serie · {v.volume} kg vol · ~{s.burn || 0} kcal
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                {Object.keys(s.muscles || {}).map((m) => (
-                  <span key={m} style={{ fontSize: 11, color: T.blue, background: "rgba(77,166,255,.1)", borderRadius: 999, padding: "3px 9px" }}>
-                    {muscleLabel(m)}
-                  </span>
-                ))}
-              </div>
-            </Card>
-          );
-        })
-      )}
     </div>
   );
 }
 
-function Mini({ label, value, color }) {
+function SectionLabel({ children }) {
+  return <div style={{ fontSize: 11, color: T.mut, fontWeight: 800, letterSpacing: 0.5 }}>{children}</div>;
+}
+function SectionTitle({ children }) {
+  return <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "4px 0 10px" }}>{children}</h2>;
+}
+
+function MacroBudget({ label, m, color }) {
+  const pct = m.target ? Math.min(1, m.eaten / m.target) : 0;
   return (
-    <div style={{ flex: 1, background: "var(--surface)", borderRadius: 14, padding: "12px", border: "1px solid var(--line)" }}>
-      <div style={{ fontSize: 10, color: T.mut, marginBottom: 4 }}>{label}</div>
-      <div className="font-display" style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+        <span style={{ color: T.mut }}>{label}</span>
+        <span style={{ fontWeight: 600 }}>{m.eaten}/{m.target} g</span>
+      </div>
+      <ProgressBar value={pct} color={color} height={6} />
     </div>
   );
 }
 
-function coachTip(plan, workoutsToday, goal) {
-  if (!plan) return "Completa il profilo per ricevere consigli su misura.";
-  if (workoutsToday > 0)
-    return `Ottimo lavoro oggi! Reintegra proteine (${plan.proteinG} g) e idratati bene per recuperare.`;
-  if (goal === "dimagrire")
-    return `Target di ${plan.target} kcal oggi. Tieni alte le proteine per preservare i muscoli mentre dimagrisci.`;
-  if (goal === "aumentare")
-    return `Per crescere punta a ${plan.target} kcal e ${plan.proteinG} g di proteine. Non saltare i pasti.`;
-  return `Giornata di mantenimento: ${plan.target} kcal, ${plan.proteinG} g proteine. Allenati quando puoi!`;
+function Mini({ label, value, unit, color }) {
+  return (
+    <div style={{ flex: 1 }}>
+      <div style={{ fontSize: 10.5, color: T.mut }}>{label}</div>
+      <div className="font-display" style={{ fontSize: 18, fontWeight: 700, color: color || T.text }}>
+        {value} <span style={{ fontSize: 10, color: T.mut, fontWeight: 400 }}>{unit}</span>
+      </div>
+    </div>
+  );
+}
+
+function RecCard({ rec }) {
+  const [open, setOpen] = useState(false);
+  const border =
+    rec.level === "action" ? T.amber : rec.level === "info" ? T.blue : T.mut;
+  return (
+    <Card style={{ marginBottom: 10, borderLeft: `3px solid ${border}` }} onClick={() => setOpen((o) => !o)}>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+        <span style={{ fontSize: 20 }}>{rec.icon}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>{rec.title}</div>
+          <div style={{ fontSize: 13, color: T.mut, marginTop: 2 }}>{rec.detail}</div>
+          {open && (
+            <div style={{ fontSize: 12.5, color: T.text, marginTop: 8, padding: 10, background: "var(--surface2)", borderRadius: 10, lineHeight: 1.5 }}>
+              <b style={{ color: border }}>Perché:</b> {rec.why}
+            </div>
+          )}
+          {!open && (
+            <div style={{ fontSize: 11.5, color: T.blue, marginTop: 6 }}>perché ▾</div>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
 }

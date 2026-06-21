@@ -26,6 +26,11 @@ export const DEFAULT_STATE = {
     setChangeBtn: false,
     rankCalc: true,
     usePrevSets: true,
+    aiProvider: "ollama", // ollama (gratis locale) | gemini | openrouter | anthropic
+    aiKey: "", // chiave del provider cloud scelto (solo locale)
+    aiModel: "", // modello del provider cloud (vuoto = default del provider)
+    ollamaUrl: "http://localhost:11434",
+    ollamaModel: "gemma3",
   },
   gamify: {
     level: 1,
@@ -33,16 +38,27 @@ export const DEFAULT_STATE = {
     coins: 200,
     streak: 0,
     lastWorkoutDate: null,
+    lastReconcile: null, // last date progression decay/penalties were applied
   },
   exercisesCustom: [], // {id,name,muscle,equipment,custom:true}
   routines: [], // {id,name,items:[{exerciseId,sets:[{kg,reps}]}]}
   plan: [], // {id,title,subtitle,durationMin,exerciseIds:[]}
   sessions: [], // see workout.js
   prs: {}, // exerciseId -> {reps,kg,timeSec,date}
-  muscleRanks: {}, // muscleKey -> {tier, points}
+  weights: [], // {date, kg} body-weight log
+  sleep: [], // {date, asleep, wake, hours} sleep log
+  muscleRanks: {}, // muscleKey -> {points, lastTrained, lastDecay}
+  pointsLog: [], // {date, muscle, delta, cause} aggregated — for monthly balance
   foodLog: {}, // dateKey -> {colazione:[],pranzo:[],cena:[],spuntino:[],nonclass:[]}
   foodsCustom: [], // user foods
   recentFoods: [], // last logged foodIds (most recent first)
+  fridge: [], // inventory {id,name,emoji,grams,per100,kcal,p,c,f}
+  coachChat: [], // {role,text,routineId?,error?} cronologia chat coach (persistente)
+  prefs: {
+    daysPerWeek: 3,
+    allowedExerciseIds: null, // null = tutti gli esercizi
+    restrict: false, // se true, genera/consiglia solo dagli esercizi consentiti
+  },
 };
 
 // merge persisted state onto defaults (shallow per top key, keeps new fields)

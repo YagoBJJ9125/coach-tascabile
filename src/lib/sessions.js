@@ -2,12 +2,8 @@
 import { getState, setState, touchStreak, addXp } from "./store.js";
 import { uid, todayKey } from "./format.js";
 import { exerciseById } from "../data/exercises.js";
-import {
-  sessionBurn,
-  sessionMuscles,
-  musclePointsFromSession,
-  e1rm,
-} from "./workout.js";
+import { sessionBurn, sessionMuscles, e1rm } from "./workout.js";
+import { sessionMusclePoints, levelForPoints, recordPoints } from "./progression.js";
 
 function blankSet(def, prev) {
   // carry previous values as placeholder ("PREC")
@@ -103,6 +99,15 @@ export function finishSession(id) {
   const weightKg = Number(st.profile.weight) || 75;
   const burn = sessionBurn(session, weightKg);
   const muscles = sessionMuscles(session);
+  const musclePts = sessionMusclePoints(session, weightKg);
+  // level before/after per muscle (for the finish summary)
+  const levelDeltas = {};
+  for (const mk of Object.keys(musclePts)) {
+    const before = st.muscleRanks[mk]?.points || 0;
+    const b = levelForPoints(before);
+    const a = levelForPoints(before + musclePts[mk]);
+    levelDeltas[mk] = { gained: musclePts[mk], before: b.label, after: a.label, promoted: a.step > b.step };
+  }
 
   setState((s) => {
     const sess = s.sessions.find((x) => x.id === id);
@@ -111,6 +116,7 @@ export function finishSession(id) {
     sess.durationSec = Math.round((sess.endedAt - sess.startedAt) / 1000);
     sess.burn = burn;
     sess.muscles = muscles;
+    sess.musclePoints = musclePts;
 
     // PRs (best e1rm per exercise)
     for (const ex of sess.exercises) {
@@ -129,11 +135,17 @@ export function finishSession(id) {
       }
     }
 
-    // muscle rank points
-    for (const mk of Object.keys(muscles)) {
-      const pts = musclePointsFromSession(sess, mk);
+    // muscle rank points (weighted matrix) + mark trained today + log event
+    const today = todayKey();
+    for (const mk of Object.keys(musclePts)) {
       const cur = s.muscleRanks[mk] || { points: 0 };
-      s.muscleRanks[mk] = { points: cur.points + pts };
+      s.muscleRanks[mk] = {
+        ...cur,
+        points: (cur.points || 0) + musclePts[mk],
+        lastTrained: today,
+        lastDecay: today,
+      };
+      recordPoints(s, today, mk, musclePts[mk], "allenamento");
     }
     return s;
   });
@@ -147,7 +159,7 @@ export function finishSession(id) {
   })();
   addXp(20 + sets * 3);
   touchStreak();
-  return { burn, muscles };
+  return { burn, muscles, musclePoints: musclePts, levelDeltas };
 }
 
 // ---- routines ----
@@ -180,6 +192,60 @@ export function createRoutine(name, exerciseIds = []) {
 export function deleteRoutine(id) {
   setState((s) => {
     s.routines = s.routines.filter((r) => r.id !== id);
+    return s;
+  });
+}
+
+// create a routine from full items [{exerciseId, sets:[{kg,reps}]}] (es. AI-generated)
+export function createRoutineFull(name, items) {
+  const rid = uid();
+  setState((s) => {
+    s.routines.unshift({ id: rid, name: name || "Scheda AI", items });
+    return s;
+  });
+  return rid;
+}
+
+// ---- "Il mio piano": generate a simple weekly split ----
+import { coachExercisePool } from "../data/exercises.js";
+
+const PLAN_TEMPLATES = [
+  { title: "Parte superiore", durationMin: 45, muscles: ["petto", "schiena", "spalle", "braccia"] },
+  { title: "Gambe", durationMin: 45, muscles: ["gambe", "gambe", "core"] },
+  { title: "Spinta", durationMin: 40, muscles: ["petto", "spalle", "braccia"] },
+  { title: "Tirata", durationMin: 40, muscles: ["schiena", "braccia", "core"] },
+];
+
+function pickByMuscles(muscleList) {
+  const byMuscle = {};
+  for (const e of coachExercisePool()) (byMuscle[e.muscle] ||= []).push(e);
+  const used = new Set();
+  const ids = [];
+  for (const m of muscleList) {
+    const pool = (byMuscle[m] || []).filter((e) => !used.has(e.id));
+    if (!pool.length) continue;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    used.add(pick.id);
+    ids.push(pick.id);
+  }
+  return ids;
+}
+
+export function generatePlan() {
+  setState((s) => {
+    s.plan = PLAN_TEMPLATES.map((t) => ({
+      id: uid(),
+      title: t.title,
+      durationMin: t.durationMin,
+      exerciseIds: pickByMuscles(t.muscles),
+    }));
+    return s;
+  });
+}
+
+export function clearPlan() {
+  setState((s) => {
+    s.plan = [];
     return s;
   });
 }

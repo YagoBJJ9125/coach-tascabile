@@ -6,17 +6,15 @@ import { Card, Segmented, Sheet, Button, Input, ProgressBar } from "../component
 import { T, RANK_TIERS } from "../theme.js";
 import { useStore } from "../lib/store.js";
 import { MUSCLE_GROUPS, muscleLabel } from "../data/muscles.js";
-import { allExercises, exerciseById } from "../data/exercises.js";
-import {
-  tierForPoints,
-  tierProgress,
-  RANK_THRESHOLDS,
-  e1rm,
-} from "../lib/workout.js";
+import { allExercises, exerciseById, exercisePoints } from "../data/exercises.js";
+import { e1rm } from "../lib/workout.js";
+import { levelForPoints, monthlyBalance } from "../lib/progression.js";
+import { monthKey } from "../lib/format.js";
 
 export default function Rank() {
   const ranks = useStore((s) => s.muscleRanks);
   const prs = useStore((s) => s.prs);
+  const pointsLog = useStore((s) => s.pointsLog);
   const [tab, setTab] = useState("grafico");
   const [calc, setCalc] = useState(false);
 
@@ -29,6 +27,7 @@ export default function Rank() {
         onChange={setTab}
         options={[
           { value: "grafico", label: "Grafico" },
+          { value: "bilancio", label: "Bilancio" },
           { value: "calc", label: "Calcolatore" },
         ]}
       />
@@ -57,6 +56,8 @@ export default function Rank() {
             <MuscleRow key={m.key} muscle={m} pts={ranks[m.key]?.points || 0} />
           ))}
         </>
+      ) : tab === "bilancio" ? (
+        <MonthBalance pointsLog={pointsLog} />
       ) : (
         <RankCalc prs={prs} />
       )}
@@ -68,10 +69,14 @@ export default function Rank() {
 
 function MuscleRow({ muscle, pts }) {
   const [open, setOpen] = useState(false);
-  const { idx, tier } = tierForPoints(pts);
-  const prog = tierProgress(pts);
-  const next = RANK_TIERS[idx + 1];
-  const nextNeed = RANK_THRESHOLDS[idx + 1];
+  const lvl = levelForPoints(pts);
+  const tier = lvl.tier;
+  // exercises that develop this muscle (breakdown by specificity)
+  const contributors = allExercises()
+    .map((e) => ({ e, w: exercisePoints(e)[muscle.key] || 0 }))
+    .filter((x) => x.w > 0)
+    .sort((a, b) => b.w - a.w)
+    .slice(0, 6);
 
   return (
     <Card
@@ -95,21 +100,95 @@ function MuscleRow({ muscle, pts }) {
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700 }}>{muscle.label}</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: tier.color, textTransform: "uppercase" }}>
-            {tier.label}
+            {lvl.label}
           </div>
         </div>
         <span style={{ color: T.mut, fontSize: 18 }}>{open ? "▴" : "▾"}</span>
       </div>
+      <div style={{ marginTop: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: T.mut, marginBottom: 4 }}>
+          <span>{lvl.points} punti</span>
+          <span>{lvl.pointsToNext > 0 ? `+${lvl.pointsToNext} al prossimo livello` : "Livello massimo!"}</span>
+        </div>
+        <ProgressBar value={lvl.progress} color={tier.color} />
+      </div>
       {open && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: T.mut, marginBottom: 4 }}>
-            <span>{pts} punti</span>
-            <span>{next ? `Prossimo: ${next.label} (${nextNeed})` : "Livello massimo!"}</span>
+          <div style={{ fontSize: 11, color: T.mut, marginBottom: 6 }}>
+            ESERCIZI CHE SVILUPPANO {muscle.label.toUpperCase()}
           </div>
-          <ProgressBar value={prog} color={tier.color} />
+          {contributors.map(({ e, w }) => (
+            <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "3px 0" }}>
+              <span>{e.emoji} {e.name}</span>
+              <span style={{ color: tier.color, fontWeight: 700 }}>+{w}</span>
+            </div>
+          ))}
         </div>
       )}
     </Card>
+  );
+}
+
+function MonthBalance({ pointsLog }) {
+  const mKey = monthKey();
+  const bal = monthlyBalance(pointsLog, mKey);
+  const monthName = new Date(mKey + "-01T00:00:00").toLocaleDateString("it-IT", {
+    month: "long",
+    year: "numeric",
+  });
+  const empty = MUSCLE_GROUPS.every((m) => bal[m.key].total === 0);
+
+  return (
+    <>
+      <Card style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: T.purple, fontWeight: 700, marginBottom: 4 }}>
+          BILANCIO DI {monthName.toUpperCase()}
+        </div>
+        <div style={{ fontSize: 12.5, color: T.mut }}>
+          Punti guadagnati/persi per gruppo muscolare, divisi per causa.
+        </div>
+      </Card>
+      {empty && (
+        <div style={{ textAlign: "center", color: T.mut, fontSize: 13, padding: 16 }}>
+          Nessun movimento questo mese. Allenati o registra i pasti.
+        </div>
+      )}
+      {MUSCLE_GROUPS.map((m) => {
+        const b = bal[m.key];
+        if (!b.total && !b.allenamento && !b.cibo && !b.sonno && !b.inattivita) return null;
+        return (
+          <Card key={m.key} style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <span style={{ fontSize: 18 }}>{m.emoji}</span>
+              <span style={{ flex: 1, fontWeight: 700 }}>{m.label}</span>
+              <span
+                className="font-display"
+                style={{ fontWeight: 700, fontSize: 18, color: b.total >= 0 ? T.green : T.coral }}
+              >
+                {b.total > 0 ? "+" : ""}{b.total}
+              </span>
+            </div>
+            <CauseRow icon="🏋️" label="Allenamento" v={b.allenamento} />
+            <CauseRow icon="🍎" label="Alimentazione" v={b.cibo} />
+            <CauseRow icon="😴" label="Sonno" v={b.sonno} />
+            <CauseRow icon="🛋️" label="Inattività" v={b.inattivita} />
+          </Card>
+        );
+      })}
+    </>
+  );
+}
+
+function CauseRow({ icon, label, v }) {
+  if (!v) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "3px 0" }}>
+      <span>{icon}</span>
+      <span style={{ flex: 1, color: T.mut }}>{label}</span>
+      <span style={{ fontWeight: 700, color: v >= 0 ? T.green : T.coral }}>
+        {v > 0 ? "+" : ""}{v}
+      </span>
+    </div>
   );
 }
 

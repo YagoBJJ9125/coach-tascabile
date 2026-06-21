@@ -39,6 +39,20 @@ export function sessionVolume(session) {
   return { volume: round(vol), sets, reps };
 }
 
+// completed sets per muscle over the last `days` (default 7), across sessions
+export function weeklySetsByMuscle(sessions, days = 7) {
+  const cut = new Date();
+  cut.setDate(cut.getDate() - days);
+  const out = {};
+  for (const s of sessions || []) {
+    if (!s.finished) continue;
+    if (new Date(s.date + "T00:00:00") < cut) continue;
+    const m = sessionMuscles(s);
+    for (const k of Object.keys(m)) out[k] = (out[k] || 0) + m[k];
+  }
+  return out;
+}
+
 // muscles trained in a session -> {muscleKey: setCount}
 export function sessionMuscles(session) {
   const out = {};

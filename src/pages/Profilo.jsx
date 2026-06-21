@@ -1,12 +1,18 @@
 // Profilo tab: edit profile, tracker settings, data export/import/reset.
 import { useState } from "react";
 import Header from "../components/Header.jsx";
-import { Card, Button, Label, Input, Select, Toggle, Segmented, H1 } from "../components/ui.jsx";
+import { Card, Button, Label, Input, Select, Toggle, Segmented, H1, MiniLine } from "../components/ui.jsx";
 import { T } from "../theme.js";
 import { useStore, setState, resetState, replaceState } from "../lib/store.js";
 import { getState } from "../lib/store.js";
 import { exportJSON } from "../lib/storage.js";
 import { nutritionPlan } from "../lib/nutrition.js";
+import { logWeight, weightTrend } from "../lib/progress.js";
+import { logSleep, sleepStats, sleepHoursFrom } from "../lib/sleep.js";
+import { fmtDateShort } from "../lib/format.js";
+import ExercisePicker from "../components/ExercisePicker.jsx";
+import { exerciseById } from "../data/exercises.js";
+import { PROVIDERS, providerInfo } from "../lib/ai.js";
 
 export default function Profilo() {
   const profile = useStore((s) => s.profile);
@@ -120,6 +126,13 @@ export default function Profilo() {
         </Button>
       </Card>
 
+      {/* weight tracking */}
+      <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>
+        Peso e progressi
+      </h2>
+      <WeightCard goalWeight={profile.goalWeight} goal={profile.goal} />
+      <SleepCard sleepGoal={profile.sleepGoal} />
+
       {/* settings */}
       <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>
         Impostazioni Tracker
@@ -155,6 +168,18 @@ export default function Profilo() {
         </Row>
       </Card>
 
+      {/* training preferences */}
+      <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>
+        Preferenze allenamento
+      </h2>
+      <PrefsCard />
+
+      {/* AI coach */}
+      <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>
+        Coach AI 🧠
+      </h2>
+      <AiCard settings={settings} setSetting={setSetting} />
+
       {/* data */}
       <h2 className="font-display" style={{ fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>
         Dati
@@ -189,6 +214,272 @@ export default function Profilo() {
         Coach Tascabile v2 · stile Lifoff · solo per te
       </div>
     </div>
+  );
+}
+
+function WeightCard({ goalWeight, goal: bodyGoal }) {
+  const weights = useStore((s) => s.weights);
+  const [val, setVal] = useState("");
+  const trend = weightTrend();
+  const goal = Number(goalWeight) || null;
+  // trend color depends on the body goal: gaining wants +, losing wants -
+  const trendColor = (() => {
+    if (!trend) return T.text;
+    const pw = trend.perWeek;
+    if (Math.abs(pw) < 0.05) return bodyGoal === "mantenere" ? T.green : T.mut;
+    if (bodyGoal === "aumentare") return pw > 0 ? T.green : T.amber;
+    if (bodyGoal === "dimagrire") return pw < 0 ? T.green : T.amber;
+    return T.mut; // mantenere with movement
+  })();
+  const points = weights.slice(-14).map((w) => ({ label: fmtDateShort(w.date), v: w.kg }));
+  const latest = weights.length ? weights[weights.length - 1].kg : null;
+
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+        <Input
+          inputMode="decimal"
+          placeholder="Peso di oggi (kg)"
+          value={val}
+          onChange={(e) => setVal(e.target.value.replace(",", "."))}
+          style={{ marginBottom: 0 }}
+        />
+        <Button
+          disabled={!val}
+          onClick={() => { logWeight(val); setVal(""); }}
+          style={{ flexShrink: 0 }}
+        >
+          Registra
+        </Button>
+      </div>
+
+      {points.length >= 2 ? (
+        <>
+          <MiniLine points={points} goal={goal} />
+          <div style={{ display: "flex", justifyContent: "space-around", marginTop: 8 }}>
+            <Mini2 label="Attuale" value={`${latest} kg`} />
+            {goal && <Mini2 label="Obiettivo" value={`${goal} kg`} color={T.green} />}
+            {trend && (
+              <Mini2
+                label="Trend/sett."
+                value={`${trend.perWeek > 0 ? "+" : ""}${trend.perWeek.toFixed(2)} kg`}
+                color={trendColor}
+              />
+            )}
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 12.5, color: T.mut, textAlign: "center", padding: "8px 0" }}>
+          {latest ? `Ultimo: ${latest} kg. ` : ""}Registra il peso per qualche giorno per vedere il grafico.
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function Mini2({ label, value, color }) {
+  return (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ fontSize: 10.5, color: T.mut }}>{label}</div>
+      <div className="font-display" style={{ fontSize: 16, fontWeight: 700, color: color || T.text }}>{value}</div>
+    </div>
+  );
+}
+
+function AiCard({ settings, setSetting }) {
+  const [show, setShow] = useState(false);
+  const provider = settings.aiProvider || "ollama";
+  const info = providerInfo(provider);
+  const models = info.models;
+  // current model: explicit or provider default
+  const curModel = settings.aiModel || (provider === "ollama" ? settings.ollamaModel : models[0]);
+  const setModel = (v) =>
+    provider === "ollama" ? setSetting({ ollamaModel: v }) : setSetting({ aiModel: v });
+  const ready = !info.needsKey || settings.aiKey?.trim();
+
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12.5, color: T.mut, lineHeight: 1.5, marginBottom: 12 }}>
+        Coach che parla e consiglia sui tuoi numeri. Scegli un provider <b>gratuito</b>.
+        Tutto resta su questo dispositivo.
+      </div>
+
+      <Label>Provider</Label>
+      <Select
+        value={provider}
+        onChange={(e) => setSetting({ aiProvider: e.target.value, aiModel: "" })}
+      >
+        {Object.entries(PROVIDERS).map(([k, p]) => (
+          <option key={k} value={k}>{p.label}</option>
+        ))}
+      </Select>
+
+      <div style={{ fontSize: 11.5, color: T.mut, lineHeight: 1.5, marginBottom: 12, padding: "8px 10px", background: "var(--surface2)", borderRadius: 10 }}>
+        ℹ️ {info.help}
+      </div>
+
+      {provider === "ollama" && (
+        <>
+          <Label>Indirizzo Ollama</Label>
+          <Input
+            value={settings.ollamaUrl}
+            onChange={(e) => setSetting({ ollamaUrl: e.target.value })}
+            placeholder="http://localhost:11434"
+          />
+        </>
+      )}
+
+      {info.needsKey && (
+        <>
+          <Label>Chiave API ({info.label.split(" ")[0]})</Label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Input
+              type={show ? "text" : "password"}
+              placeholder="incolla la chiave…"
+              value={settings.aiKey}
+              onChange={(e) => setSetting({ aiKey: e.target.value })}
+              style={{ marginBottom: 0 }}
+            />
+            <button onClick={() => setShow((s) => !s)} style={{ flexShrink: 0, background: "var(--surface2)", border: "1px solid var(--line)", color: T.text, borderRadius: 12, padding: "0 12px" }}>
+              {show ? "🙈" : "👁"}
+            </button>
+          </div>
+        </>
+      )}
+
+      <Label>Modello</Label>
+      <Select value={curModel} onChange={(e) => setModel(e.target.value)}>
+        {models.map((m) => (
+          <option key={m} value={m}>{m}</option>
+        ))}
+      </Select>
+
+      <div style={{ fontSize: 11.5, color: ready ? T.green : T.amber }}>
+        {ready
+          ? "✓ Coach AI pronto"
+          : "Inserisci la chiave, oppure usa Ollama locale (gratis). Senza config: modalità base."}
+      </div>
+      <div style={{ fontSize: 11, color: T.mut, marginTop: 8 }}>
+        📱 Sul telefono usa <b>Gemini</b> o <b>OpenRouter</b> (gratis): Ollama gira solo sul PC.
+      </div>
+    </Card>
+  );
+}
+
+function SleepCard({ sleepGoal }) {
+  const sleep = useStore((s) => s.sleep);
+  const [asleep, setAsleep] = useState("23:00");
+  const [wake, setWake] = useState("07:00");
+  const goal = Number(sleepGoal) || 8;
+  const stats = sleepStats(sleep, goal);
+  const preview = sleepHoursFrom(asleep, wake);
+  const timeStyle = {
+    flex: 1, background: "var(--surface2)", border: "1px solid var(--line)",
+    borderRadius: 12, padding: "11px 12px", color: T.text, fontSize: 15, outline: "none",
+  };
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: T.mut, marginBottom: 4 }}>🌙 Addormentato</div>
+          <input type="time" value={asleep} onChange={(e) => setAsleep(e.target.value)} style={timeStyle} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, color: T.mut, marginBottom: 4 }}>☀️ Sveglia</div>
+          <input type="time" value={wake} onChange={(e) => setWake(e.target.value)} style={timeStyle} />
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1, fontSize: 13, color: T.mut }}>
+          Stanotte: <b style={{ color: T.text }}>{preview} h</b> (obiettivo {goal} h)
+        </div>
+        <Button onClick={() => logSleep(asleep, wake)} disabled={!preview}>
+          Registra
+        </Button>
+      </div>
+      {stats && (
+        <div style={{ display: "flex", justifyContent: "space-around", marginTop: 12 }}>
+          <Mini2 label="Media 7gg" value={`${stats.avg7} h`} />
+          <Mini2 label="Debito" value={`${stats.debt} h`} color={stats.debt > 5 ? T.coral : T.text} />
+          <Mini2 label="Regolarità" value={`${stats.regularity}%`} color={stats.regularity >= 70 ? T.green : T.amber} />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function PrefsCard() {
+  const prefs = useStore((s) => s.prefs);
+  const [picker, setPicker] = useState(false);
+  const setPref = (patch) =>
+    setState((s) => {
+      s.prefs = { ...s.prefs, ...patch };
+      return s;
+    });
+  const allowed = prefs.allowedExerciseIds || [];
+  const removeAllowed = (id) =>
+    setPref({ allowedExerciseIds: allowed.filter((x) => x !== id) });
+
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <Row label="Giorni a settimana">
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Stepper
+            value={prefs.daysPerWeek}
+            min={1}
+            max={7}
+            onChange={(v) => setPref({ daysPerWeek: v })}
+          />
+        </div>
+      </Row>
+      <Divider />
+      <Row label="Solo i miei esercizi" sub="Genera e consiglia solo dagli esercizi scelti (es. solo push-up e squat).">
+        <Toggle on={prefs.restrict} onChange={(v) => setPref({ restrict: v })} />
+      </Row>
+
+      {prefs.restrict && (
+        <>
+          <Button variant="ghost" full onClick={() => setPicker(true)} style={{ marginTop: 12 }}>
+            ＋ Scegli esercizi consentiti
+          </Button>
+          {allowed.length > 0 ? (
+            <div style={{ marginTop: 10 }}>
+              {allowed.map((id) => (
+                <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderTop: "1px solid var(--line)" }}>
+                  <span style={{ fontSize: 18 }}>{exerciseById(id)?.emoji || "•"}</span>
+                  <span style={{ flex: 1, fontSize: 13.5 }}>{exerciseById(id)?.name || id}</span>
+                  <button onClick={() => removeAllowed(id)} style={{ background: "none", border: "none", color: T.coral, fontSize: 15 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: T.mut, marginTop: 8, textAlign: "center" }}>
+              Nessun esercizio scelto: vengono usati tutti.
+            </div>
+          )}
+        </>
+      )}
+
+      <ExercisePicker
+        open={picker}
+        onClose={() => setPicker(false)}
+        onConfirm={(ids) => setPref({ allowedExerciseIds: [...new Set([...allowed, ...ids])] })}
+      />
+    </Card>
+  );
+}
+
+function Stepper({ value, min = 0, max = 99, onChange }) {
+  const btn = {
+    width: 34, height: 34, borderRadius: 10, border: "1px solid var(--line)",
+    background: "var(--surface2)", color: T.text, fontSize: 18, fontWeight: 700,
+  };
+  return (
+    <>
+      <button style={btn} onClick={() => onChange(Math.max(min, value - 1))}>−</button>
+      <span className="font-display" style={{ fontSize: 18, fontWeight: 700, minWidth: 22, textAlign: "center" }}>{value}</span>
+      <button style={btn} onClick={() => onChange(Math.min(max, value + 1))}>＋</button>
+    </>
   );
 }
 

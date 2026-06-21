@@ -6,12 +6,19 @@ export const norm = (s) => (s || "").trim().toLowerCase();
 export const uid = () =>
   Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-export const todayKey = () => new Date().toISOString().slice(0, 10);
-
+// date keys are LOCAL "YYYY-MM-DD" (not UTC) — using toISOString here would shift
+// the day by the timezone offset and break day boundaries / addDays.
 export const dateKey = (d) => {
   const x = d instanceof Date ? d : new Date(d);
-  return x.toISOString().slice(0, 10);
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, "0");
+  const day = String(x.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 };
+
+export const todayKey = () => dateKey(new Date());
+
+export const monthKey = (iso) => (iso || todayKey()).slice(0, 7); // "YYYY-MM"
 
 export const addDays = (iso, n) => {
   const d = new Date(iso + "T00:00:00");
