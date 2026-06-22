@@ -1,29 +1,28 @@
 // Workout & Rank helpers.
 import { round, clamp } from "./format.js";
-import { exerciseById, TRACK_MET } from "../data/exercises.js";
+import { exerciseById, exerciseMeta } from "../data/exercises.js";
 import { RANK_TIERS } from "../theme.js";
 
-const SEC_PER_REP = 4; // durata media di una ripetizione controllata (s) — per stimare le kcal
-
-// Per-set calorie estimate (GROSS). Scala con la DURATA effettiva:
-//  - time/distance: secondi loggati
-//  - forza/reps: durata = reps × ~4s; il CARICO aumenta lo sforzo (MET) come per i punti
-// Così più ripetizioni e più peso = più kcal (es. curl 5×20kg > 5×3kg).
+// Per-set calorie estimate (GROSS), MOTORE MET guidato dai metadati dell'esercizio
+// (categoria → MET + sec/rep, vedi exerciseMeta). Scala con la DURATA effettiva:
+//  - time/distance: secondi loggati × MET
+//  - forza/reps: durata = reps × sec/rep (dalla categoria); il CARICO aumenta lo sforzo (MET)
+// Così più ripetizioni e più peso = più kcal, e anche un esercizio non mappato è stimabile.
 export function setBurn(def, set, weightKg = 75) {
   const tracks = (def && def.tracks) || "weight_reps";
-  const met = (def && def.met) || TRACK_MET[tracks] || 4;
+  const meta = exerciseMeta(def); // { met, secPerRep, category }
   if (tracks === "time" || tracks === "distance") {
     const sec = Number(set.timeSec) || 0;
-    return met * weightKg * (sec / 3600);
+    return meta.met * weightKg * (sec / 3600);
   }
   const reps = Number(set.reps) || 0;
   if (!reps) return 0; // senza reps non si stima nulla
-  let metEff = met;
+  let metEff = meta.met;
   if (tracks === "weight_reps") {
     const kg = Number(set.kg) || 0;
     metEff *= clamp(1 + kg / Math.max(40, weightKg), 1, 3); // il carico aumenta lo sforzo
   }
-  return metEff * weightKg * ((reps * SEC_PER_REP) / 3600);
+  return metEff * weightKg * ((reps * meta.secPerRep) / 3600);
 }
 
 // Estimate a session's calorie burn from its COMPLETED sets (used at finish).

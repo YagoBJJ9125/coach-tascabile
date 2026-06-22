@@ -348,6 +348,21 @@ modifiche a `coach.js` (energyPlan), `ledger.js`, `Home.jsx`, `Alimentazione.jsx
 - [ ] TODO: ripristinare anche XP/streak/PR su elimina (ora solo punti rank); modifica serie di una
   sessione finita senza riaprirla; spread carico più marcato per i grossi sollevamenti se richiesto.
 
+## EPIC 19 — Motore kcal MET a metadati + pasti on-demand frigo-first (FATTO, 2026-06-22)
+- [x] **Motore calorico MET guidato da metadati** (no valori statici): `EXERCISE_CATEGORIES`
+  (met + sec/rep per categoria) + `EXERCISE_CATEGORY` (categoria per esercizio) + `exerciseMeta(def)`
+  in data/exercises.js. `workout.setBurn` stima da peso × MET × durata (reps × sec/rep, o secondi)
+  × fattore carico. **Estendibile**: un esercizio custom/sconosciuto eredita met+sec/rep dalla
+  categoria dedotta dal `tracks`. Verificato (panca 10×60kg → ~9 kcal; compound met6 > isolamento).
+- [x] **Pasti consigliati ON-DEMAND, frigo-first** (`meals.generateMeal`, UI in Alimentazione):
+  rimossi i consigli auto-precompilati; ora pulsanti "Genera consiglio colazione/pranzo/spuntino/
+  cena". Il motore usa **prima il frigo** (solo alimenti sensati per il pasto, niente mix improbabili),
+  poi integra dal DB segnando in **ROSSO** ("da comprare") ciò che non possiedo. Dopo: "＋ Aggiungi a
+  <pasto>" o "↻ Genera altro" (variante). Modifica/elimina manuale invariati. Verificato (pranzo:
+  pollo+riso dal frigo + olio/fagioli in rosso; "genera altro" → burro+lenticchie).
+- [ ] TODO: composizione pasto via OpenFoodFacts/IA per alimenti reali fuori dal seed; preferenze
+  quote pasti e allergie; cache OFF; tuning sec/rep e MET sul campo.
+
 ## Ordine consigliato d'attacco (proposta)
 1. **Mini-pass PWA** (EPIC 11) → subito "installabile", morale alto.
 2. Completare fasi core mancanti (onboarding mascotte, tastierino tracker, "Il mio piano").

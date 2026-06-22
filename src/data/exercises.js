@@ -155,3 +155,70 @@ export function exercisePoints(ex) {
   if (!ex) return {};
   return EXERCISE_POINTS[ex.id] || (ex.muscle ? { [ex.muscle]: 10 } : {});
 }
+
+// ---- Metadati fisiologici per la STIMA CALORICA (motore MET, non valori statici) ----
+// Ogni categoria definisce un MET medio (intensità) e una durata media per ripetizione (s).
+// Il motore stima le kcal da: peso utente × MET × durata (reps × sec/rep, oppure secondi per
+// tempo/distanza) + fattore carico. Estendibile: un esercizio sconosciuto/custom eredita la
+// categoria dal suo `tracks` (vedi exerciseMeta), quindi è stimabile anche se non mappato.
+export const EXERCISE_CATEGORIES = {
+  forza_composto:   { met: 6,   secPerRep: 4, label: "Forza multiarticolare" }, // squat, panca, stacco…
+  forza_isolamento: { met: 4.5, secPerRep: 3, label: "Forza isolamento" },      // curl, alzate…
+  corpo_libero:     { met: 5,   secPerRep: 3, label: "Corpo libero" },          // piegamenti, trazioni…
+  core:             { met: 4,   secPerRep: 3, label: "Core / addome" },
+  isometrico:       { met: 4,   secPerRep: 0, label: "Tenuta isometrica" },     // plank (tempo)
+  cardio:           { met: 8,   secPerRep: 0, label: "Cardio" },                // corsa, cyclette…
+};
+
+// categoria di ogni esercizio del seed (metadato, non calorie statiche)
+export const EXERCISE_CATEGORY = {
+  // forza multiarticolare
+  ex_panca_piana: "forza_composto", ex_panca_inclinata_manubri: "forza_composto",
+  ex_rematore_bilanciere: "forza_composto", ex_stacco: "forza_composto",
+  ex_lat_machine: "forza_composto", ex_pulldown_cavi: "forza_composto",
+  ex_military_press: "forza_composto", ex_shoulder_press_manubri: "forza_composto",
+  ex_squat: "forza_composto", ex_affondi: "forza_composto", ex_leg_press: "forza_composto",
+  ex_stacco_rumeno: "forza_composto",
+  // isolamento
+  ex_croci_cavi: "forza_isolamento", ex_alzate_laterali: "forza_isolamento",
+  ex_alzate_frontali: "forza_isolamento", ex_curl_bilanciere: "forza_isolamento",
+  ex_curl_manubri: "forza_isolamento", ex_curl_martello: "forza_isolamento",
+  ex_french_press: "forza_isolamento", ex_pushdown_cavi: "forza_isolamento",
+  ex_leg_curl: "forza_isolamento", ex_leg_extension: "forza_isolamento",
+  ex_polpacci: "forza_isolamento",
+  // corpo libero
+  ex_piegamenti: "corpo_libero", ex_piegamenti_ginocchio: "corpo_libero",
+  ex_dip_panca: "corpo_libero", ex_trazioni: "corpo_libero",
+  ex_rematore_inverso_tavolo: "corpo_libero", ex_pike_pushup: "corpo_libero",
+  ex_dip_parallele: "corpo_libero", ex_squat_corpo_libero: "corpo_libero",
+  // core
+  ex_crunch: "core", ex_crunch_bici: "core", ex_addominali: "core",
+  ex_ab_rollout_trx: "core", ex_russian_twist: "core",
+  // isometrico / cardio
+  ex_plank: "isometrico", ex_mountain_climber: "cardio",
+  ex_corsa: "cardio", ex_cyclette: "cardio",
+};
+
+// fallback categoria dal tipo di tracciamento, per esercizi non mappati (custom/nuovi)
+const CATEGORY_BY_TRACKS = {
+  weight_reps: "forza_isolamento",
+  reps: "corpo_libero",
+  time: "isometrico",
+  distance: "cardio",
+};
+
+// metadati risolti per un esercizio: { category, met, secPerRep }.
+// Precedenza: campi espliciti sull'esercizio > categoria mappata > categoria dal `tracks` > default.
+export function exerciseMeta(def) {
+  const catKey =
+    (def && EXERCISE_CATEGORY[def.id]) ||
+    (def && def.category) ||
+    CATEGORY_BY_TRACKS[def && def.tracks] ||
+    "forza_isolamento";
+  const base = EXERCISE_CATEGORIES[catKey] || { met: 4.5, secPerRep: 3 };
+  return {
+    category: catKey,
+    met: def && def.met != null ? def.met : base.met,
+    secPerRep: def && def.secPerRep != null ? def.secPerRep : base.secPerRep,
+  };
+}

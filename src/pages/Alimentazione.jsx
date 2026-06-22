@@ -13,7 +13,7 @@ import { todayKey, addDays, fmtDateLong, isToday, norm } from "../lib/format.js"
 import { allFoods, foodById, MEAL_TYPES, MICRO_KEYS } from "../data/foods.js";
 import { buildEntry, logFood, removeFood } from "../lib/food.js";
 import { searchOFF, getByBarcode } from "../lib/openfoodfacts.js";
-import { mealPlan } from "../lib/meals.js";
+import { mealTargets, generateMeal } from "../lib/meals.js";
 import { scanReceipt, providerInfo } from "../lib/ai.js";
 import { matchReceipt } from "../lib/receipt.js";
 
@@ -45,7 +45,7 @@ export default function Alimentazione() {
   const target = plan?.target || 0; // include già il credito attività
   const exerciseKcal = activity.credit;
   const remaining = target - eaten.kcal;
-  const mp = useMemo(() => mealPlan(fullState, date, plan), [fullState, date, plan]);
+  const mt = useMemo(() => mealTargets(fullState, date, plan), [fullState, date, plan]);
 
   const acceptMeal = (mealKey, items) => {
     for (const it of items) {
@@ -92,8 +92,17 @@ export default function Alimentazione() {
         <Dots n={3} active={page} onSet={setPage} />
       </Card>
 
-      {/* pasti consigliati */}
-      {mp && <MealSuggestions mp={mp} onAccept={acceptMeal} onPick={(food) => setDetail({ food, meal: "nonclass" })} />}
+      {/* pasti consigliati (on-demand) */}
+      {mt && (
+        <MealSuggestions
+          mt={mt}
+          state={fullState}
+          date={date}
+          energy={plan}
+          onAccept={acceptMeal}
+          onPick={(food, meal) => setDetail({ food, meal })}
+        />
+      )}
 
       {/* meals */}
       <div style={{ marginTop: 16 }}>
@@ -521,60 +530,96 @@ function MicroPage({ micros, filter, title }) {
   );
 }
 
-function MealSuggestions({ mp, onAccept, onPick }) {
-  const open = mp.meals.filter((m) => !m.done);
+function MealSuggestions({ mt, state, date, energy, onAccept, onPick }) {
+  const [gen, setGen] = useState({}); // mealKey -> { variant, suggestion, loading }
+  useEffect(() => { setGen({}); }, [date]); // reset cambiando giorno
+
+  const open = mt.meals.filter((m) => !m.done);
+
+  const generate = (mealKey, variant) => {
+    setGen((g) => ({ ...g, [mealKey]: { variant, loading: true } }));
+    // breve defer per far girare lo spinner (calcolo sincrono)
+    setTimeout(() => {
+      const s = generateMeal(state, date, energy, mealKey, variant);
+      setGen((g) => ({ ...g, [mealKey]: { variant, suggestion: s, loading: false } }));
+    }, 20);
+  };
+
   return (
     <Card style={{ marginTop: 16, marginBottom: 4 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div style={{ fontSize: 11, color: T.mut, fontWeight: 800 }}>🍽️ PASTI CONSIGLIATI</div>
         <div style={{ fontSize: 11, color: T.mut }}>
-          restano {mp.remainingDay.kcal} kcal · P{mp.remainingDay.p} C{mp.remainingDay.c} G{mp.remainingDay.f}
+          restano {mt.remainingDay.kcal} kcal · P{mt.remainingDay.p} C{mt.remainingDay.c} G{mt.remainingDay.f}
         </div>
       </div>
       {open.length === 0 && (
         <div style={{ fontSize: 12.5, color: T.mut, padding: "6px 0" }}>Tutti i pasti registrati. 🎉</div>
       )}
-      {open.map((m) => (
-        <div key={m.key} style={{ borderTop: "1px solid var(--line)", padding: "10px 0" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 700, fontSize: 14.5 }}>{m.emoji} {m.label}</div>
-            <div style={{ fontSize: 11.5, color: T.mut }}>
-              ~{m.target.kcal} kcal · P{m.target.p} C{m.target.c} G{m.target.f}
+      {open.map((m) => {
+        const cur = gen[m.key];
+        const s = cur?.suggestion;
+        return (
+          <div key={m.key} style={{ borderTop: "1px solid var(--line)", padding: "10px 0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{m.emoji} {m.label}</div>
+              <div style={{ fontSize: 11.5, color: T.mut }}>
+                obiettivo ~{m.target.kcal} kcal · P{m.target.p} C{m.target.c} G{m.target.f}
+              </div>
             </div>
-          </div>
-          {m.suggestion ? (
-            <>
-              <div style={{ margin: "8px 0" }}>
-                {m.suggestion.items.map((it, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onPick(it.food)}
-                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "5px 0", background: "none", border: "none", textAlign: "left", color: T.text }}
-                  >
-                    <span style={{ fontSize: 17 }}>{it.food.emoji}</span>
-                    <span style={{ flex: 1, fontSize: 13.5 }}>
-                      {it.food.name}{it.food.fromFridge && <span style={{ color: T.green, fontSize: 11 }}> · frigo</span>}
-                    </span>
-                    <span style={{ fontSize: 12, color: T.mut }}>{it.grams} g · {it.kcal} kcal</span>
-                  </button>
-                ))}
-              </div>
-              <div style={{ fontSize: 11, color: T.mut, marginBottom: 8 }}>
-                Totale: {m.suggestion.totals.kcal} kcal · P{m.suggestion.totals.p} C{m.suggestion.totals.c} G{m.suggestion.totals.f}
-              </div>
-              <Button full variant="ghost" onClick={() => onAccept(m.key, m.suggestion.items)} style={{ padding: "10px" }}>
-                ✓ Aggiungi {m.label.toLowerCase()}
+
+            {!cur ? (
+              <Button full variant="ghost" onClick={() => generate(m.key, 0)} style={{ marginTop: 8, padding: "11px" }}>
+                🍽️ Genera consiglio {m.label.toLowerCase()}
               </Button>
-            </>
-          ) : (
-            <div style={{ fontSize: 12, color: T.mut, padding: "6px 0" }}>
-              Nessun consiglio (target basso o pochi alimenti).
-            </div>
-          )}
-        </div>
-      ))}
+            ) : cur.loading ? (
+              <div style={{ fontSize: 12.5, color: T.mut, padding: "12px 0", textAlign: "center" }}>elaboro il consiglio…</div>
+            ) : !s ? (
+              <div style={{ fontSize: 12, color: T.mut, padding: "8px 0" }}>
+                Nessun consiglio possibile (target troppo basso o alimenti insufficienti).{" "}
+                <button onClick={() => generate(m.key, (cur.variant || 0) + 1)} style={{ background: "none", border: "none", color: T.blue, fontWeight: 700 }}>riprova</button>
+              </div>
+            ) : (
+              <>
+                <div style={{ margin: "8px 0" }}>
+                  {s.items.map((it, i) => (
+                    <button
+                      key={i}
+                      onClick={() => onPick(it.food, m.key)}
+                      style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "5px 0", background: "none", border: "none", textAlign: "left", color: T.text }}
+                    >
+                      <span style={{ fontSize: 17 }}>{it.food.emoji}</span>
+                      <span style={{ flex: 1, fontSize: 13.5, color: it.inFridge ? T.text : T.coral }}>
+                        {it.food.name}
+                        {!it.inFridge && <span style={{ fontSize: 10.5, marginLeft: 6 }}>· da comprare</span>}
+                      </span>
+                      <span style={{ fontSize: 12, color: T.mut }}>{it.grams} g · {it.kcal} kcal</span>
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: T.mut, marginBottom: 4 }}>
+                  Totale: {s.totals.kcal} kcal · P{s.totals.p} C{s.totals.c} G{s.totals.f}
+                </div>
+                <div style={{ fontSize: 10.5, marginBottom: 8 }}>
+                  <span style={{ color: T.green }}>{s.fromFridge} dal frigo</span>
+                  {s.missing > 0 && <span style={{ color: T.coral }}> · {s.missing} da comprare (in rosso)</span>}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Button full onClick={() => onAccept(m.key, s.items)} style={{ padding: "10px" }}>
+                    ＋ Aggiungi a {m.label.toLowerCase()}
+                  </Button>
+                  <Button variant="ghost" onClick={() => generate(m.key, (cur.variant || 0) + 1)} style={{ padding: "10px", flexShrink: 0 }}>
+                    ↻ Genera altro
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
       <div style={{ fontSize: 10.5, color: T.mut, marginTop: 8 }}>
-        Mangi altro? Registra ciò che hai preso: i pasti successivi si ricalcolano da soli.
+        Prima usa ciò che hai in frigo; il resto (in rosso) è da comprare. Puoi modificare o
+        aggiungere tutto a mano. Registrando i pasti, i target dei successivi si aggiornano.
       </div>
     </Card>
   );
